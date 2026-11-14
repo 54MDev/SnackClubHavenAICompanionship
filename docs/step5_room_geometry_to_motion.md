@@ -1,11 +1,12 @@
 # Step 5 — MRUK room geometry → motionbricks motion (handoff)
 
-**Status: stages 1-3 of 5 DONE (2026-11-14). Behaviour (1) of step 5 — point a controller
-and she walks there — WORKS on-device, verified numerically and visually ("moves literally
-perfectly"). Next up is stage 4 (NavMesh path corners), which delivers behaviour (2),
-routing around real furniture.** Steps 1-4 of
-`CLAUDE.md` are done and working on-device. See §8 for the staged plan and what stage 1
-measured, including one known defect (she paces around an arrived-at target).
+**Status: STEP 5 COMPLETE (2026-11-14). All 5 stages done. Both behaviours verified
+on-device and in the headset: point a controller and she walks there, and the motion routes
+around real scanned furniture. "it completely works, moves around furniture."**
+Steps 1-4 of `CLAUDE.md` are also done. §8 holds the per-stage record and measurements;
+§7's traps and §9's open decisions are still worth reading before changing any of this.
+The one known cosmetic defect is arrival pacing (she mills ~+/-0.5 m around a reached
+target) — user explicitly accepted it as fine.
 Written 2026-11-14 for a fresh agent. Read `CLAUDE.md` steps 1-4 first for the retargeting
 history — this doc assumes that pipeline works and only covers the new direction of data.
 
@@ -324,9 +325,34 @@ path state entirely, which matters because the Python loop is GPU-paced and shou
      `navMeshSnapDistance` rather than raising it.
    - **30.0 Hz for the full 75 s, 1 late frame of 2250**, streaming to the headset while
      13 inbound targets were processed. The inbound channel costs the pose rate nothing.
-4. **NavMesh path corners.** Replace "send hit point" with `NavMesh.CalculatePath` and send
-   the next corner, advancing as the character reaches each. Behaviour (2) now works, because
-   the path already routes around scanned furniture.
+4. ~~**NavMesh path corners.**~~ **DONE 2026-11-14. Behaviour (2) works.**
+   User in headset: *"it completely works, moves around furniture."*
+   - `TargetSender.SendDestination()` computes `NavMesh.CalculatePath` and
+     `AdvanceAlongPath()` feeds motionbricks the next corner once she is within
+     `cornerReachedRadius` (0.5 m, horizontal distance only — the streamed root's height is
+     not meaningful for "has she arrived", and comparing in 3D stalls the path).
+   - **All path state lives in Unity**; the Python side stays stateless, which matters
+     because its loop is GPU-paced and must stay dumb.
+   - **Measured, 14 paths in one 90 s run:** 10x 2-corner `PathComplete`, 3x 2-corner
+     `PathPartial`, and **1x 4-corner `PathPartial`** — the avoidance case, with **2
+     mid-path corner advances** and 9 paths completed. The multi-corner bookkeeping works.
+   - **Three failure modes handled, each deliberately:**
+     - *Both path ends must be on the NavMesh.* Her root is driven by streamed poses and
+       drifts off the mesh, so the START is snapped too — otherwise `CalculatePath` silently
+       fails and nothing moves.
+     - *`PathPartial`* (destination not fully reachable) -> **follow it anyway** and get as
+       close as possible. 4 of 14 paths were partial, so refusing would have read as a dead
+       trigger on nearly a third of presses. This call is load-bearing, don't "fix" it.
+     - *`PathInvalid` / no path* -> fall back to walking straight at the destination, so a
+       pathfinding failure degrades to stage-3 behaviour instead of freezing her.
+   - **Bug caught at compile time, worth remembering:** `new NavMeshPath()` as a field
+     initializer throws `InitializeNavMeshPath is not allowed to be called from a
+     MonoBehaviour constructor`. It must be constructed in `Awake`. This would have been a
+     silent runtime failure on-device.
+   - **Reversibility (all three still in place):** `useNavMeshPath = false` in the Inspector
+     reverts to stage-3 behaviour with **no rebuild**;
+     `Builds/SnackClubHaven-stage3-KNOWN-GOOD.apk` restores the previous build in one
+     `adb install -r`; commit `e15c339` is the source checkpoint for stages 1-3.
 5. Optionally draw the path with a LineRenderer for debugging — `AnimateLineRenderer.cs`
    already exists in the NavMesh sample.
 

@@ -1755,6 +1755,8 @@ MonoBehaviour:
   cameraRig: {fileID: 0}
   maxRayDistance: 10
   navMeshSnapDistance: 1.5
+  useNavMeshPath: 1
+  cornerReachedRadius: 0.5
   fallbackTarget: {x: 1.5, y: 0, z: 2.3}
 --- !u!1001 &708986874
 PrefabInstance:

@@ -477,6 +477,21 @@ Plan review findings first, then ordered steps.
    **Done when:** moving the controller ray to a new point visibly redirects the rig's
    live motion toward it, and placing a real-world obstacle (per MRUK scan) causes the
    generated motion to route around it in the headset.
+   **MET 2026-11-14 — BOTH halves, on-device.** User in headset: *"moves literally
+   perfectly"* (pointing) and *"it completely works, moves around furniture"* (avoidance).
+   - Pointing: 13 trigger presses -> 13 datagrams, 12 of 13 confirmed to the centimetre;
+     NavMesh snap mean 0.236 m; 30.0 Hz with 1 late frame of 2250 while handling inbound.
+   - Avoidance: 14 paths in 90 s — 10x 2-corner `PathComplete`, 3x 2-corner `PathPartial`,
+     1x **4-corner** `PathPartial` with 2 mid-path corner advances.
+   - Built: `Assets/Scripts/TargetSender.cs`, `PoseFrameCodec.EncodeTarget`,
+     `PoseReceiver.StartPosition`, and the sender's inbound socket on 5006
+     (`yup_to_zup_pos`, `decode_target`, `drain_target`, `--target X,Y`).
+   - Reversibility kept: `useNavMeshPath = false` reverts to straight-line walking with no
+     rebuild; `Builds/SnackClubHaven-stage3-KNOWN-GOOD.apk`; checkpoint commit `e15c339`.
+   - Known cosmetic defect, accepted by the user: she mills ~+/-0.5 m around a reached
+     target (the jog target pose carries 1.9 m/s of momentum). Fix options in
+     `docs/step5_room_geometry_to_motion.md` §9.
+   - Full record: `docs/step5_room_geometry_to_motion.md`.
 6. Apply Depth-API occlusion material to the rig (`docs/mruk_depth_occlusion_notes.md`).
    **This is now the blocking gap — everything it depends on is verified working.**
    On-device the Depth API is live (`XR_META_environment_depth: Version=2`,
