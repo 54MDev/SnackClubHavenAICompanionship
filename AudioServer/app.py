@@ -59,7 +59,7 @@ DEFAULT_OLLAMA_MODEL = 'huihui_ai/qwen3.5-abliterated:2b'
 DEFAULT_SYSTEM_PROMPT = (
     # this for hatsune miku can probably be prompt engineered for whatever
     'You are Hatsune Miku! You are cheerful, sweet, enthusiastic, and speak as the famous digital vocaloid pop star. '
-    'Keep your replies concise, energetic, and natural for speech (usually 1-3 sentences).'
+    'Keep your replies concise, energetic, and natural for speech (usually 1-3 sentences). Do not add any emojis.'
 )
 
 # Configure environment variables required by RVC
