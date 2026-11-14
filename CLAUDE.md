@@ -120,11 +120,179 @@ Plan review findings first, then ordered steps.
      Unity's 1-unit-= 1-meter convention; with this rig's current import scale that
      assumption doesn't hold. Fix the FBX import scale (or compensate in
      `positionScale`) before trusting root-position placement in step 4.
-4. Add a UDP sender to motionbricks' runtime loop emitting the frame payload from step 2.
-   Verify end-to-end on PC (Quest Link) with the rig in the NavMesh sample scene.
+4. **WORKING as of 2026-11-14 (desktop Editor); formal "done when" not fully met — needs
+   the NavMesh scene over Quest Link.** Real motionbricks inference
+   streams into `PoseReceiver` and the plumbing is confirmed working (see below). The
+   previously-reported broken pose (character tipped on her side, limbs distorted) was
+   traced to the wire format itself sending raw bind-pose-relative local rotations; all
+   four rotation/coordinate issues from the earlier handoff are now addressed in one
+   change. **Nobody has looked at Game view since.**
+
+   **What changed:** the wire format now carries **world-space rotation deltas from the
+   sender's own rest pose** instead of raw local rotations.
+   - `tools/pose_sender_motionbricks.py`: FKs each pose with the skeleton's own
+     `compute_world_transforms`, computes `delta = G_pose * G_rest^-1` per joint against
+     the rest pose (`reference_local_transforms` FK'd with `root_tx=rig.model_to_runtime`
+     so both are in the same Z-up runtime space), then applies the Z-up→Y-up conversion.
+   - `Assets/Scripts/PoseReceiver.cs`: captures each bone's rest **world** rotation at
+     `Awake()` and applies `bone.rotation = delta * restWorld`. SOMA joint order is
+     parent-before-child, so writing world rotations in list order is safe.
+   - `flipHandedness` / `PoseFrameCodec.ConvertHandedness` **deleted** (and the stale
+     `flipHandedness: 1` dropped from `Assets/Scenes/PoseReceiverTest.unity`). Axis
+     conversion now lives only in the Python sender, which owns the Z-up source data.
+
+   **Why this is the right fix, not another guess:** raw local rotations are relative to
+   SOMA's bind pose; DonQuixote's Humanoid avatar has a different one, so composing them
+   onto Unity's rest pose (the old `restLocal * incoming`) distorted every limb — that was
+   issue #3 in the old notes. The world-space delta cancels **both** bind poses out, and
+   it also dissolves issue #4 (Hips's transform already *was* a world placement, so
+   treating everything as world-space is now consistent) and issue #1 (one conversion, in
+   one place). Identity delta still means "hold rest pose", so
+   `tools/pose_sender_test.py`'s synthetic frames remain meaningful.
+
+   The Z-up→Y-up quaternion `(-x, -z, -y, w)` from the old issue #2 was **verified
+   correct**, not replaced: `python tools/pose_sender_motionbricks.py --self-test`
+   (runnable offline, no GPU) asserts it is a homomorphism (`T(ab) == T(a)T(b)`, checked
+   on a non-commuting pair — which is what makes it valid to apply per joint in a
+   hierarchy), that it agrees with `zup_to_yup_pos` when rotating a vector, and that a
+   pose equal to the rest pose packs to identity deltas. **Ran it: passed.**
+   `Assets/Scripts/PoseFrameCodec.cs`'s editor self-test still passes unchanged.
+
+   **What was already confirmed working (unchanged from the earlier handoff):**
+   - `tools/pose_sender_motionbricks.py` runs motionbricks' actual
+     `MotionBricksSOMAEngine` + `GeneratedMotionPlayer` live (adapted from
+     `motionbricks/docs/examples/locomotion_loop.py`) on real hardware (RTX 4080 SUPER,
+     cached TensorRT plan), 30 Hz, root tracking a real jog-with-a-turn.
+   - The 30 SOMA joints are correctly located in the skeleton's full 77-joint array
+     (`rig.skeleton.joint_names.index(name)` per `SOMA_JOINT_ORDER`, parent names
+     verified).
+   - UDP delivery and decode work; `PoseReceiver` never throws.
+   - A `FollowCamera` (Camera, child of `DonQuixote`, tag `MainCamera`) exists in
+     `Assets/Scenes/PoseReceiverTest.unity` — the scene originally had no camera, which
+     is why the first live runs appeared to show nothing. No further scene setup needed.
+
+   **Bone mapping verified on the live rig (2026-11-14):** dumped
+   `animator.GetBoneTransform` for all 30 SOMA joints in Play mode. Every one resolves to
+   the anatomically correct Rigify bone (`Hips`→`spine`, `Spine1`→`spine.001`,
+   `Head`→`face`, `LeftLeg`→`thigh.L`, `LeftShin`→`shin.L`, `LeftToeBase`→`toe.L`, …) —
+   the thigh/calf offset trap does not bite, as predicted. `Jaw` is the only missing bone
+   and is skipped without erroring. Avatar `DonQuixoteAvatar`, `isHuman=true`, valid, no
+   AnimatorController assigned. **Mapping is not a suspect for any remaining visual bug.**
+
+   **Jitter fixed (2026-11-14, not yet re-tested visually):** the rig moved but jittered.
+   Cause was frame cadence, not mapping: bones were written in `Update()` and only on
+   frames a datagram actually landed on. The sender runs at 30 Hz against a much faster
+   render loop, so most frames wrote nothing and the Animator's own Humanoid avatar
+   evaluation (which happens *between* `Update` and `LateUpdate`) showed through — the rig
+   alternated between the streamed pose and the avatar pose at the beat frequency. Fixed
+   in `PoseReceiver.cs` by moving the bone writes to `LateUpdate()`, caching the last
+   decoded frame and re-applying it every render frame, and setting
+   `animator.applyRootMotion = false` in `Awake()` since this script owns the root
+   transform.
+
+   **Inverted limbs fixed (2026-11-14, not yet re-tested visually):** after the jitter fix
+   the limbs moved but bent wrong — knees inward, elbows backwards. **It was not a mirror
+   and not the bone mapping**; both were measured and cleared:
+   - *Chirality is intact.* Signed triple product of (hips→LeftArm, hips→RightArm,
+     hips→Head) is `+0.0073` in SOMA's RH basis and negative in Unity's LH basis. That
+     sign flip is exactly what a mirror-free RH→LH conversion must produce, so the Y/Z
+     swap is not reflecting the character.
+   - *Two rest-pose mismatches were the actual cause.* Measured
+     `animator.GetBoneTransform` rest directions against SOMA's reference pose:
+
+     | | SOMA rest | DonQuixote bind pose |
+     | --- | --- | --- |
+     | `LeftArm`→`LeftForeArm` | `(+1, 0, 0)` (T-pose) | `(-0.424, -0.824, -0.375)` |
+     | `LeftForeArm`→`LeftHand` | `(+1, 0, 0)` | `(-0.398, -0.265, +0.878)` |
+     | `LeftLeg`→`LeftShin` | `(0, 0, -1)` = down | `(-0.029, -1.000, 0)` = down |
+
+     SOMA's rest is a clean T-pose in metres (head at 1.61 m); DonQuixote's FBX bind pose
+     has arms hanging ~55° down with elbows already bent. The world-space delta is
+     measured from SOMA's T-pose, so applying it to an already-posed bind pose
+     double-rotated every limb. Legs matched better, which is why they looked merely
+     splayed rather than broken.
+   - *The two rests were also yawed 180° apart.* SOMA faces `-Y` with its left arm on
+     `+X`; Unity rigs (DonQuixote measured: `LeftUpperArm.x = -605`) face `+Z` with the
+     left arm on `-X`. The bare Y/Z swap landed SOMA facing `-Z`.
+
+   **The two fixes:**
+   - `tools/pose_sender_motionbricks.py`: conversion is now `pos -> (-x, z, -y)` and
+     `quat -> (x, -z, y, w)` — the same Y/Z swap (determinant -1, so chirality still
+     holds) composed with a 180° yaw, which lines SOMA's rest up with Unity's humanoid
+     convention. `--self-test` re-passes (homomorphism, pos/quat agreement, rest→identity),
+     so the new pair is internally consistent, not a guess.
+   - `Assets/Scripts/PoseReceiver.cs`: `ReferenceRotation()` builds, once at `Awake()`, a
+     **T-pose-aligned reference** per bone — the bind-pose world rotation pre-swung by
+     `Quaternion.FromToRotation(actualBoneDirection, somaRestDirection)` so each bone axis
+     points where SOMA's T-pose points it. Deltas are applied to that instead of the raw
+     bind pose. `PoseFrameCodec.SomaRestBoneDirections` (SOMA's rest directions in Unity
+     space) and `SomaChildJoint` (which child defines each bone's axis) are **generated
+     from `soma_base_skel_minimal_no_root.usd`**, not hand-written; the editor self-test
+     asserts the two tables agree about which joints are leaves. Ran it: passed.
+
+   **Dead end, recorded so nobody retries it:** zeroing `HumanPose.muscles` and calling
+   `HumanPoseHandler.SetHumanPose` does **not** give a T-pose. Measured: it yields the
+   avatar's relaxed neutral — arms ~45° down (`(-0.634, -0.646, 0.424)`), knees bent 30°.
+   Unity's stored T-pose is not reachable through public runtime API, hence the
+   direction-alignment approach above.
+
+   **Visually confirmed 2026-11-14** (user, Editor Game view, `PoseReceiverTest.unity`):
+   after the delta-retarget, jitter and T-pose-alignment fixes the rig jogs correctly —
+   limbs bend the right way and she travels a long distance over the run. The three
+   rotation/coordinate bugs are closed.
+
+   **Still open:**
+   - **Not yet tested in the NavMesh scene or over Quest Link**, which is what step 4's
+     "done when" actually asks for, and no frame rate was measured. Desktop Editor only
+     so far.
+   - **Twist is not retargeted.** `FromToRotation` is a minimal-arc alignment, so it
+     corrects each bone's *direction* but not its roll about its own axis. If wrists or
+     forearms read as rolled, align a second axis (the limb's bend plane) rather than
+     using `FromToRotation`. Hands specifically get no alignment at all — SOMA's
+     `LeftHand`/`RightHand` child is an end marker with no `HumanBodyBones` slot, so those
+     fall back to the raw bind rotation.
+   **Scale fixed properly, 2026-11-14 (was: `positionScale = 3493` as a fudge).**
+   `DonQuixote.fbx`'s `ModelImporter.globalScale` went `15.63624` -> `0.004476024`
+   (= `15.63624 * 1.012 / 3535.252`, i.e. calibrated so the rest hips height matches
+   SOMA's `1.012 m`), and `PoseReceiver.positionScale` is back to `1`. The rig is now at
+   Unity's 1-unit-=-1-metre convention, which step 6's MR occlusion needs.
+   - Verified after reimport: hips `1.0120 m`, head `1.6765 m`, upper arm `0.231 m`
+     (SOMA's is `0.289` — different proportions, not an error). Avatar survived: all 19
+     required `HumanBodyBones` resolve, `isHuman`, valid, and 24 of 30 SOMA joints bind
+     (correct — 5 have no Humanoid slot, `Jaw` is absent on this rig).
+   - Two things the scale change dragged with it, both fixed: `FollowCamera`'s local
+     position was framed in the old units (`(0, 9167, -16111)`, i.e. 16 km out) and was
+     rescaled by the same factor to `(0, 2.624, -4.612)`; and `PoseReceiver` now
+     subtracts `_hipsOffsetFromRoot` from the streamed root position, because SOMA's root
+     **is** its Hips joint while this script moves the GameObject root, which sits a
+     hip-height below — the rig had been floating by exactly that much, invisible at
+     ~3500x scale.
+   - Housekeeping: an earlier `HumanPoseHandler.SetHumanPose` experiment had been
+     accidentally saved into `PoseReceiverTest.unity`, leaving the relaxed pose as the
+     stored rest. Reverted all 103 transform overrides on the prefab instance; bind pose
+     confirmed restored (`LeftUpperArm->LeftLowerArm` back to `(-0.424, -0.824, -0.375)`).
+   - **No interpolation.** Each 30 Hz pose is held until the next arrives (a stair-step,
+     not a smooth blend). Fine at 30 Hz; if it reads as choppy on-device, `Slerp` toward
+     the latest frame instead of snapping to it.
+   - **Scale:** `DonQuixote.fbx`'s `ModelImporter.globalScale` is `15.6`, not `1`, so the
+     rig is not at Unity's 1-unit-=-1-metre scale while `PoseReceiver.positionScale` is
+     `1` and the sender sends metres. Expect root translation to look far too small for
+     the rig's size. Fix the FBX import scale (or `positionScale`) when tuning placement.
+
+   **How to run it:**
+   ```
+   # Terminal 1 — Unity: open PoseReceiverTest.unity, enter Play mode
+   # Terminal 2:
+   cd ../motionbricks
+   uv run python ../SnackClubHavenAICompanionship/tools/pose_sender_motionbricks.py --duration 45
+   ```
+   Needs the `motionbricks` repo as a sibling checkout with its own `uv` venv set up, and
+   a CUDA GPU (first run per process builds/loads a TensorRT plan).
+
    **Done when:** rig in the NavMesh scene visibly mirrors live motionbricks motion over
    Quest Link, at >=20 Hz observed (no visible stutter/snapping), for one full generated
-   sequence without a dropped-frame crash.
+   sequence without a dropped-frame crash. **Partially met:** the motion itself is correct
+   and smooth in the desktop Editor; the NavMesh-scene-over-Quest-Link half is untested.
 5. Feed MRUK room geometry → motionbricks obstacles (format TBD from `runtime_api.md`),
    controller ray hit → target position. Same socket, opposite direction.
    **Done when:** moving the controller ray to a new point visibly redirects the rig's
