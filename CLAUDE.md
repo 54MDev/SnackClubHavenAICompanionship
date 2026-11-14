@@ -364,7 +364,11 @@ mapper resolves bones to `HumanBodyBones` by hierarchy, not name, so the offset 
 disappears. The SOMA side still needs one hand-written SOMA-name → `HumanBodyBones` table
 (step 2 in Next steps). The Blender/Rokoko path below is only for offline clip checks.
 
-Units: SOMA/BVH clips are Y-up, centimeters.
+Units: **the live runtime path is Z-up and in metres** — `motionbricks/io/bvh.py` multiplies
+the BVH's centimetre offsets by `0.01` on load, and the engine runs in MuJoCo-convention Z-up
+world space. Measured 2026-11-14: SOMA's rest hips sit at `1.012`, head at `1.610`. The
+"Y-up, centimetres" note that used to be here described the raw BVH files, not what comes out
+of the runtime, and cost a session's debugging — see step 4.
 
 ## Offline clip check in Blender (validated on a test rig — NOT the live path)
 
@@ -384,7 +388,7 @@ runtime pipeline.
    `COPY_ROTATION`/`COPY_LOCATION` constraints, bakes with `nla.bake`, then deletes the
    duplicate+constraints. Fine for a clip check; irrelevant for live.
 
-## Live streaming (not yet built — this is the plan, not done)
+## Live streaming (BUILT and working in the desktop Editor as of 2026-11-14 — step 4)
 
 Live pose goes **motionbricks → UDP → Unity**, no Blender in the loop. The rig renders in
 Unity on Quest, so that's where the bones get driven.
@@ -396,10 +400,12 @@ Unity on Quest, so that's where the bones get driven.
    joint, decoded from `pred_global_motions`. Keep it tiny and ours. Don't reuse Rokoko's
    live protocol — it carries capture-hardware skeleton/face/prop/tracker data we don't
    need.
-3. **Unity side:** `PoseReceiver.cs` on the rig. Reads the datagram, looks each SOMA joint
-   up in the SOMA→`HumanBodyBones` table, sets the mapped bone's local rotation via the
-   Animator's avatar (`animator.GetBoneTransform`). Convert SOMA's Y-up cm to Unity's Y-up
-   m (÷100; handedness flip to verify on first frame).
+3. **Unity side — BUILT, see step 4 for what it actually does.** `PoseReceiver.cs` on the
+   rig. The original plan here ("set local rotation; convert Y-up cm to m; handedness flip
+   to verify") is superseded on every count: the stream carries **world-space rotation
+   deltas from SOMA's T-pose**, applied to a T-pose-aligned reference built from the rig's
+   own bind pose, and all axis conversion (`pos -> (-x, z, -y)`, `quat -> (x, -z, y, w)`)
+   lives in the Python sender. No ÷100 anywhere — the runtime is already in metres.
 4. **Bootstrap without motionbricks running:** replay a SOMA BVH clip from a 20-line
    Python sender so the receiver can be debugged in isolation.
 5. **Reverse direction** (MRUK geometry → motionbricks obstacles, controller ray →
