@@ -18,6 +18,7 @@ import socket
 import struct
 import sys
 from pathlib import Path
+from time import perf_counter, sleep
 
 import numpy as np
 
@@ -35,11 +36,15 @@ from motionbricks.runtime.target_pose import (  # noqa: E402
 
 from _rig import JOG, load_rig, root_positions, sample_window  # noqa: E402
 
-HOST, PORT = "127.0.0.1", 5005
+HOST, PORT = "127.0.0.1", 5005  # --host overrides HOST for an on-device build (Quest over Wi-Fi)
+TARGET_PORT = 5006  # inbound: Unity -> here, "walk to this spot" (step 5, stage 1)
+ARRIVAL_SLOW_RADIUS = 0.25  # m; inside this the target pose lands on the character, so she settles
 UPDATE_RATE = 30.0  # matches PoseReceiver.cs / PoseFrameCodec's one-datagram-per-frame design
 DESIRED_SPEED = 1.9  # m/s, SOMA's jog clip speed (from motionbricks' own locomotion_loop.py)
 LEAD_SECONDS = 1.0
 TRANSITION_EARLY_BY = 4
+TARGET_FORMAT = "<2fB"  # see decode_target
+TARGET_SIZE = struct.calcsize(TARGET_FORMAT)  # 9 bytes
 TURN_THRESHOLD_DEG = 15.0
 TARGET_TIME = 1.8
 TURN_START, TURN_END = 2.0, 4.0
@@ -92,6 +97,47 @@ def zup_to_yup_pos(p: np.ndarray) -> np.ndarray:
     (DonQuixote measured) face +Z with the left arm on -X.
     """
     return np.array([-p[0], p[2], -p[1]], dtype=np.float32)
+
+
+def yup_to_zup_pos(u: np.ndarray) -> np.ndarray:
+    """Exact inverse of zup_to_yup_pos: Unity Y-up left-handed -> motionbricks Z-up.
+
+    Needed for the inbound direction (step 5): Unity owns the room and the NavMesh, so it
+    sends target points in ITS space and this is where they come back into ours. Derived,
+    not guessed -- zup_to_yup_pos maps (x, y, z) -> (-x, z, -y), so inverting each component
+    gives (-u.x, -u.z, u.y). self_test() asserts the round-trip.
+    """
+    return np.array([-u[0], -u[2], u[1]], dtype=np.float32)
+
+
+def decode_target(payload: bytes) -> np.ndarray | None:
+    """One inbound target datagram -> ground position in our Z-up space, or None for "idle".
+
+    Wire format, 9 bytes: float32 x, float32 y, uint8 has_target. The two floats are ALREADY
+    in motionbricks Z-up ground coordinates -- Unity does that conversion with the
+    yup_to_zup_pos rule above, because for a ground target Unity's height drops out entirely
+    and it collapses to (-d.x, -d.z). Sending an absolute target rather than a direction is
+    deliberate: it is idempotent, so a dropped datagram just means she keeps walking to the
+    last known spot instead of veering off.
+    """
+    x, y, has_target = struct.unpack(TARGET_FORMAT, payload)
+    return None if not has_target else np.array([x, y, 0.0], dtype=np.float32)
+
+
+def drain_target(sock: socket.socket, current: np.ndarray | None) -> np.ndarray | None:
+    """Newest target on the socket, or `current` if nothing arrived.
+
+    Non-blocking and drains the whole backlog every tick: the main loop is wall-clock paced
+    at 30 Hz, so a blocking read would wreck the pacing and bring back the jitter that
+    pacing just fixed. Malformed datagrams are dropped, matching PoseReceiver.cs.
+    """
+    while True:
+        try:
+            payload = sock.recv(64)
+        except BlockingIOError:
+            return current
+        if len(payload) == TARGET_SIZE:
+            current = decode_target(payload)
 
 
 def zup_to_yup_quat(q: np.ndarray) -> np.ndarray:
@@ -175,6 +221,24 @@ def self_test() -> None:
     packed = pack_frame(rest, rest_inv, [0, 1])
     quats = np.array(struct.unpack("<8f", packed[12:])).reshape(2, 4)
     assert np.allclose(np.abs(quats[:, 3]), 1.0, atol=1e-6), f"rest pose should give identity, got {quats}"
+    # Step 5: the inbound conversion must be the EXACT inverse of the outbound one, on a
+    # vector with three distinct nonzero components (so a swapped or dropped axis is caught).
+    v = np.array([1.0, 2.0, 3.0], dtype=np.float32)
+    assert np.allclose(zup_to_yup_pos(v), [-1.0, 3.0, -2.0]), zup_to_yup_pos(v)
+    assert np.allclose(yup_to_zup_pos(zup_to_yup_pos(v)), v), "yup_to_zup_pos is not the inverse"
+    assert np.allclose(zup_to_yup_pos(yup_to_zup_pos(v)), v), "inverse does not round-trip both ways"
+
+    # Unity's ground-target shortcut: height must drop out, leaving (-d.x, -d.z).
+    d = np.array([0.5, 9.9, -2.0], dtype=np.float32)  # Unity-space offset; y is nonsense on purpose
+    ground = yup_to_zup_pos(d) * np.array([1.0, 1.0, 0.0], dtype=np.float32)
+    assert np.allclose(ground, [-0.5, 2.0, 0.0]), ground
+
+    # Target datagram round-trip, including the idle flag.
+    assert decode_target(struct.pack(TARGET_FORMAT, 1.5, -2.5, 1)) is not None
+    assert np.allclose(decode_target(struct.pack(TARGET_FORMAT, 1.5, -2.5, 1)), [1.5, -2.5, 0.0])
+    assert decode_target(struct.pack(TARGET_FORMAT, 1.5, -2.5, 0)) is None, "has_target=0 must mean idle"
+    assert TARGET_SIZE == 9, TARGET_SIZE
+
     print("pose_sender_motionbricks self-test passed.")
 
 
@@ -182,6 +246,14 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--duration", type=float, default=60.0, help="seconds to run (default: 60)")
     parser.add_argument("--self-test", action="store_true", help="run the offline math check and exit")
+    parser.add_argument("--target", type=lambda v: [float(n) for n in v.split(",")], default=None,
+                        metavar="X,Y",
+                        help="initial ground target in motionbricks Z-up coords, e.g. --target 2,0 . "
+                             "Lets stage 1 be tested with no Unity and no headset. Without it the "
+                             "character runs the original scripted jog until a target datagram lands.")
+    parser.add_argument("--host", default=HOST,
+                        help=f"destination IP (default: {HOST}). Use the headset's Wi-Fi IP for an "
+                             "on-device build, which takes Quest Link out of the loop entirely.")
     args = parser.parse_args()
 
     if args.self_test:
@@ -203,7 +275,7 @@ def main() -> None:
     rest_world_inv = np.stack([qinv(world.numpy()[idx, 3:7]) for idx in joint_indices])
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    print(f"Sending live motionbricks frames to {HOST}:{PORT} at {UPDATE_RATE} Hz for {args.duration:.0f}s.")
+    print(f"Sending live motionbricks frames to {args.host}:{PORT} at {UPDATE_RATE} Hz for {args.duration:.0f}s.")
 
     with rig.engine as engine, wp.ScopedStream(engine.stream):
         player = GeneratedMotionPlayer(engine, rig.skeleton)
@@ -217,17 +289,46 @@ def main() -> None:
         foot_contacts = wp.zeros(4, dtype=wp.float32)
         generated_direction = None
         delta_time = 1.0 / UPDATE_RATE
+        start = perf_counter()
+        late_frames = 0
+
+        target_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        target_sock.bind(("0.0.0.0", TARGET_PORT))
+        target_sock.setblocking(False)
+        target = None if args.target is None else np.array([*args.target, 0.0], dtype=np.float32)
+        print(f"Listening for targets on 0.0.0.0:{TARGET_PORT}"
+              + ("" if target is None else f"; starting target {args.target}"))
 
         for step in range(round(args.duration * UPDATE_RATE)):
             time = step * delta_time
-            direction = steering(time)
             position = root_positions(current_pose.reshape((1, -1)))[0] * np.array([1.0, 1.0, 0.0])
+
+            # Step 5: a target from Unity (or --target) wins; with no target at all we fall
+            # back to the original scripted jog so the known-good demo still runs unchanged.
+            target = drain_target(target_sock, target)
+            if target is None:
+                direction = steering(time)
+                lead = DESIRED_SPEED * LEAD_SECONDS
+            else:
+                to_target = target - position
+                distance = float(np.linalg.norm(to_target[:2]))
+                # Clamping the lead to the remaining distance is what makes her STOP instead
+                # of overshooting: as distance -> 0 the target pose lands on top of her.
+                lead = min(DESIRED_SPEED * LEAD_SECONDS, distance)
+                if distance > ARRIVAL_SLOW_RADIUS:
+                    direction = (to_target / distance).astype(np.float32)
+                elif generated_direction is not None:
+                    direction = generated_direction  # arrived: hold heading, don't spin
+                else:
+                    direction = steering(time)
+                if step % round(UPDATE_RATE) == 0:
+                    print(f"    target {target[:2].round(2)}  distance {distance:5.2f} m")
 
             turned = generated_direction is not None and math.degrees(
                 math.acos(min(1.0, float(direction @ generated_direction)))
             ) > TURN_THRESHOLD_DEG
             if generated_direction is None or turned or player.time_to_transition <= delta_time:
-                ground_position = position + direction * DESIRED_SPEED * LEAD_SECONDS
+                ground_position = position + direction * lead
                 place_target_poses(
                     wp.vec3(*ground_position), wp.vec3(*direction), jog_poses, target_poses, stream=engine.stream,
                 )
@@ -238,13 +339,28 @@ def main() -> None:
             player.record_pose(delta_time, current_pose)
 
             rig.skeleton.compute_world_transforms(current_pose, world, stream=engine.stream)
-            sock.sendto(pack_frame(world.numpy(), rest_world_inv, joint_indices), (HOST, PORT))
+            sock.sendto(pack_frame(world.numpy(), rest_world_inv, joint_indices), (args.host, PORT))
+
+            # The loop used to be unpaced: delta_time was only the SIMULATION timestep, so
+            # frames went out as fast as the GPU could produce them. Sharing a GPU with Unity's
+            # XR render + Link encode that collapsed to ~8-15 Hz and arrived in bursts (measured
+            # 1-75 Hz within one run), which is what made the rig jitter -- and running the GPU
+            # flat out starved the renderer. Clocking it to wall time makes 30 Hz mean 30 Hz and
+            # leaves the GPU idle between frames.
+            slack = start + (step + 1) * delta_time - perf_counter()
+            if slack > 0:
+                sleep(slack)
+            else:
+                late_frames += 1
 
             if step % round(UPDATE_RATE) == 0:
                 engine.synchronize()
                 print(f"t = {time:4.1f}s  steering {direction[:2].round(2)}  root {position[:2].round(2)}")
         engine.synchronize()
-    print("Done.")
+        elapsed = perf_counter() - start
+        sent = round(args.duration * UPDATE_RATE)
+        print(f"Done. Sent {sent} frames in {elapsed:.1f}s = {sent / elapsed:.1f} Hz achieved "
+              f"({late_frames} frames late, i.e. the GPU could not keep up with {UPDATE_RATE:.0f} Hz).")
 
 
 if __name__ == "__main__":

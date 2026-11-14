@@ -13,6 +13,7 @@ public static class PoseFrameCodec
 {
     public const int JointCount = 30;
     public const int PayloadSize = sizeof(float) * (3 + JointCount * 4); // 492 bytes
+    public const int TargetPayloadSize = sizeof(float) * 2 + 1; // 9 bytes, "<2fB" in the sender
 
     public static readonly string[] SomaJointOrder =
     {
@@ -101,6 +102,30 @@ public static class PoseFrameCodec
         return bytes;
     }
 
+    /// <summary>
+    /// Outbound target datagram (step 5): a Unity world-space OFFSET from the rig's scene
+    /// origin -> motionbricks Z-up ground coords, packed as 9 bytes "&lt;2fB".
+    ///
+    /// The conversion is the inverse of the sender's zup_to_yup_pos, which maps
+    /// (x, y, z) -> (-x, z, -y). Inverting gives (-u.x, -u.z, u.y) -- and because
+    /// motionbricks' ground plane is XY with Z up, the up component is dropped, so a
+    /// ground target collapses to just (-d.x, -d.z). Unity's HEIGHT drops out entirely,
+    /// which is correct for walking to a spot on the floor.
+    ///
+    /// Pass the offset, not the world point: PoseReceiver places the rig at
+    /// _startPosition + streamed root, so the stream's origin is the rig's scene
+    /// placement, not the room origin.
+    /// </summary>
+    public static byte[] EncodeTarget(Vector3 offsetFromRigOrigin, bool hasTarget = true)
+    {
+        var bytes = new byte[TargetPayloadSize];
+        int o = 0;
+        WriteFloat(bytes, ref o, -offsetFromRigOrigin.x);
+        WriteFloat(bytes, ref o, -offsetFromRigOrigin.z);
+        bytes[o] = (byte)(hasTarget ? 1 : 0);
+        return bytes;
+    }
+
     public static Frame Decode(byte[] bytes)
     {
         if (bytes.Length != PayloadSize)
@@ -159,6 +184,18 @@ public static class PoseFrameCodec
             UnityEngine.Assertions.Assert.AreEqual(child == -1, SomaRestBoneDirections[i] == Vector3.zero,
                 $"Joint {i} ({SomaJointOrder[i]}): child index and rest direction disagree");
         }
+
+        // Step 5 target encoding: height must drop out, x and z must both negate, and the
+        // has_target flag must land in the last byte. Mirrors the sender's --self-test.
+        var target = EncodeTarget(new Vector3(0.5f, 9.9f, -2.0f));
+        UnityEngine.Assertions.Assert.AreEqual(TargetPayloadSize, target.Length);
+        UnityEngine.Assertions.Assert.AreApproximatelyEqual(-0.5f, System.BitConverter.ToSingle(target, 0),
+            "target x must be -offset.x");
+        UnityEngine.Assertions.Assert.AreApproximatelyEqual(2.0f, System.BitConverter.ToSingle(target, 4),
+            "target y must be -offset.z (Unity height is dropped)");
+        UnityEngine.Assertions.Assert.AreEqual((byte)1, target[8]);
+        UnityEngine.Assertions.Assert.AreEqual((byte)0, EncodeTarget(Vector3.zero, false)[8],
+            "hasTarget=false must encode the idle flag");
 
         Debug.Log("PoseFrameCodec self-test passed.");
     }

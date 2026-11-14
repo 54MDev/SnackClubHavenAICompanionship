@@ -291,26 +291,263 @@ Plan review findings first, then ordered steps.
 
    **Done when:** rig in the NavMesh scene visibly mirrors live motionbricks motion over
    Quest Link, at >=20 Hz observed (no visible stutter/snapping), for one full generated
-   sequence without a dropped-frame crash. **Partially met:** the motion itself is correct
-   and smooth in the desktop Editor; the NavMesh-scene-over-Quest-Link half is untested.
-5. Feed MRUK room geometry → motionbricks obstacles (format TBD from `runtime_api.md`),
-   controller ray hit → target position. Same socket, opposite direction.
+   sequence without a dropped-frame crash. **MET 2026-11-14 — on-device, not over Link,
+   which is strictly better. Quest Link is a dead end on this machine; don't retry it.**
+   User in headset: "it works so well and is so smooth." Sender: `30.0 Hz achieved,
+   2 frames late` out of 1350 (vs ~8/s and 1-75 Hz bursts over Link).
+
+   **THE WORKING PATH — on-device APK, pose streamed over Wi-Fi. Use this, not Link.**
+   ```
+   # 1. build+install (Unity: platform already Android; ~4 min build)
+   #    scene list must be ONLY Assets/MRUKSamples/NavMesh/NavMesh.unity so the APK
+   #    boots into it instead of StartScene. Output: Builds/SnackClubHaven.apk
+   ADB="C:/Program Files/Unity/Hub/Editor/6000.0.38f1/Editor/Data/PlaybackEngines/AndroidPlayer/SDK/platform-tools/adb.exe"
+   "$ADB" install -r Builds/SnackClubHaven.apk
+   "$ADB" shell monkey -p com.samples.mruksample -c android.intent.category.LAUNCHER 1
+   # 2. stream from the PC (headset's Wi-Fi IP, NOT loopback)
+   cd ../motionbricks
+   uv run python ../SnackClubHavenAICompanionship/tools/pose_sender_motionbricks.py        --host 172.16.1.134 --duration 45
+   ```
+   - Package id is **`com.samples.mruksample`** (`ProjectSettings` `applicationIdentifier`),
+     NOT the `com.meta.mruksample` in `Assets/Plugins/Android/AndroidManifest.xml` — that
+     manifest's `package=` attribute is ignored. Using the manifest name gives
+     "No activities found to run".
+   - `tools/pose_sender_motionbricks.py` gained `--host` for this; default stays loopback.
+   - Verified on device: `XR_FB_passthrough: Version=5` **available** (it is *Unavailable*
+     over Link), `XR_META_environment_depth: Version=2`, `USE_SCENE: granted=true`,
+     `android.permission.INTERNET: granted=true` (Unity's manifest merger adds INTERNET
+     from the `UdpClient` even though `ForceInternetPermission: 0`), MRUK anchors load and
+     persist natively. PC `172.16.1.25/23` and Quest `172.16.1.134/23` are same-subnet with
+     no AP isolation (ping 0% loss, 3-20 ms).
+   - Needs USB only to install. Headset must be authorized for adb (tap **Allow** in the
+     headset); `adb connect <ip>:5555` fails unless wireless debugging was enabled first.
+   - **Unity Editor is not needed to run the demo** — the APK runs standalone.
+
+   **Why Link was abandoned (measured, don't re-litigate):** cable negotiates USB 2.0
+   (`transmission_type: USB2_DISCO` in 53/57 streaming steps, 81
+   `usbwatcher_disconnected` events). Unity submitted **2-8 app fps against 72 presented**,
+   so the compositor reprojected nearly every frame; reprojection corrects head motion but
+   not object motion, which is why the *moving characters* tore while the static room
+   looked fine. Dropping Standalone quality Ultra->Medium changed app fps **not at all**,
+   which is what proved render cost was never the bottleneck. Sender alone with Unity idle:
+   `30.0 Hz, 1 frame late` — motionbricks was never the problem.
+
+   **Unity crashed at 21:20:12** (`%LOCALAPPDATA%/Temp/Unity/Editor/Crashes/Crash_2026-11-14_212012185`)
+   right after the USB cable was unplugged/replugged while it still held the Link XR
+   session; `mfh264enc.dll` (Link's H.264 encoder) is in the faulting module list. No work
+   lost — the scene and QualitySettings had been saved through the Editor API, everything
+   else was written to disk directly. Unity also re-serialized
+   `Assets/Universal Render Pipeline Asset.asset` on the Android platform switch
+   (`m_PrefilteringModeAdditionalLight: 4 -> 3`, a shader-stripping hint only; MSAA still 4).
+   Test plan for the remaining half: `docs/quest_link_test_plan.md`.
+
+   **Quest Link run #1 (2026-11-14, cable Link, `NavMesh.unity`, Editor Play mode):**
+   - **Passthrough blocker found and fixed — it was never in the project.** The Link
+     runtime wasn't advertising `XR_FB_passthrough` (`Editor-prev.log`: `Unavailable
+     OpenXR extension: XR_FB_passthrough` → `Failed to initialize Insight Passthrough
+     ... Failure_NotInitialized`). Cause: *Passthrough over Meta Quest Link* and *Spatial
+     Data over Meta Quest Link* were off in the Link desktop app. After toggling both
+     (+ restart): `[Insight MR] Successfully initialized passthrough` and
+     `XR_TYPE_EVENT_DATA_PASSTHROUGH_LAYER_RESUMED_META`. Every project-side setting was
+     audited and was already correct — details in `docs/quest_link_test_plan.md` §3.
+   - **Pose stream reached the rig, but the ≥20 Hz bar failed.** Sender ran its full 45 s
+     (`Done.`, exit 0, no PoseReceiver exceptions). Receiver counted **359 datagrams in
+     45 s ≈ 8/s delivered, 15.6 Hz avg per logged second, bursty (1→75 Hz)**, 23 log
+     lines where ~45 were expected — so the receive thread sat blocked for multi-second
+     stretches, then got bursts. Sender claims 30 Hz; not yet determined whether it was
+     GPU-starved by Unity's XR render + Link encode on the same RTX 4080 (likely — the
+     desktop-Editor run had no Link encoder competing) or whether its loop free-runs.
+     **Next:** stamp each datagram with send time (or just print sender-side achieved Hz)
+     to split sender-vs-receiver before touching anything.
+   - **Visual result (user, in headset): passthrough fully visible, but no movement from
+     DonQuixote.** Root cause found, and it is *not* the missing room scan: `PoseReceiver`
+     set `transform.position` to the streamed root **absolutely**, so the rig teleported
+     off its `(1.5, 0, 0.3)` scene placement to the world origin and then jogged straight
+     out of the room — the sender's own log shows root reaching `[5.79, 80.14]`, i.e. 80 m,
+     by t=44s. The desktop-Editor run looked fine only because a `FollowCamera` chased her;
+     that camera is disabled in `NavMesh.unity` (the headset owns `MainCamera`), so from a
+     fixed viewpoint she leaves frame in ~2 s and reads as "never appeared".
+     **Fixed** in `PoseReceiver.cs`: streamed root is now an offset from the rig's scene
+     position (`_startPosition`), plus a `followRootPosition` bool — set to `false` on the
+     `NavMesh.unity` instance so she jogs in place and stays observable. Step 5 is what
+     gives the two frames a shared origin; at that point place the rig at the room origin
+     and the behaviour degenerates to the old absolute one. Sender `--self-test` re-passes;
+     scene saved with `followRootPosition: 0`.
+   - **The room-scan prompt needs no code — MRUK already does it, and it cannot work over
+     Link.** `MRUK.cs:784` calls `LoadSceneFromDevice()` with its default
+     `requestSceneCaptureIfNoDataFound: true`, and `MRUK.Shared.cs:271` runs
+     `OVRScene.RequestSpaceSetup()` on the `NoRoomsFound` branch. That branch *did* run —
+     the console warning we saw is printed at `MRUK.Shared.cs:264`, immediately above it:
+     "Scene capture does not work over Link or XR Sim. If using Link please capture a scene
+     with the HMD in standalone mode, then access the scene model over Link." So the fix is
+     operational, not code: run **Space Setup in the headset standalone**, then reconnect
+     Link. Adding another prompt call would duplicate the SDK's and still return false.
+   - The 6 `NullReferenceException`s were all `OVRInputModule` (intro-canvas UI pointer),
+     not `PoseReceiver` — stack traces checked, unrelated to the pose path.
+
+   **Quest Link run #2 (2026-11-14, after the room rescan). Room data, occlusion and
+   Breeze all work; jitter fixed; tearing diagnosed but NOT fixed.**
+   - **Room scan came through:** `Anchor search complete with 16 anchors`, `Found 1 room
+     V1 anchors` (run #1 had 0 + the JSON fallback). Breeze's NavMesh works, and the user
+     confirms Depth-API occlusion works in the headset.
+   - **Don's jitter root cause: `tools/pose_sender_motionbricks.py` had no pacing at all.**
+     `delta_time = 1/UPDATE_RATE` was only the *simulation* timestep and `time = step *
+     delta_time` a virtual clock — the loop had no `sleep`, so it emitted frames as fast
+     as the GPU produced them and ran the GPU flat out. Sharing the GPU with Unity's XR
+     render + Link encode, that collapsed to ~8-15 Hz in irregular bursts.
+     **Fixed** by clocking the loop to wall time (`slack = start + (step+1)*delta_time -
+     perf_counter()`), plus an achieved-Hz line at exit.
+     Measured, same scene, Play mode, before -> after: receiver **15.6 Hz avg, range
+     1-75** -> **33.2 Hz avg, range 14-48**; sender reports `29.5 Hz achieved`.
+     User confirms "jitter was a lot less" in the headset. `--self-test` still passes.
+     Note `381/600 frames late` — frame time sits right at 33 ms, so 30 Hz is marginal
+     while sharing the GPU. Receiver-side `Slerp` (already flagged above as the planned
+     next step) is the remaining lever if it still reads choppy.
+   - **Tearing on both characters: NOT the pose path, and not occlusion.** DonQuixote has
+     no materials at all (only the two FBXs), so she isn't even using
+     `MRUKOccludedLit` — an occlusion-edge artifact cannot explain tearing on her. Two
+     real causes, both from the Link app's own telemetry
+     (`%LOCALAPPDATA%\Oculus\PerfLog_2026-11-14_14.54.26.json`,
+     `oculus_pc_xrs_stats_event` rows):
+     1. **The cable is negotiating USB 2.0.** `transmission_type` reads `USB2_DISCO` in
+        53 of 57 streaming steps, plus 81 `oculus_xrs_pc_usbwatcher_disconnected` events.
+        Quest Link wants USB 3.0; at USB 2 bitrate the stream glitches
+        (`num_glitches` 1-9/min, flagged `num_glitches_with_high_bitrate`). The charging
+        cable bundled with the headset is USB 2 — use the official Link cable or a
+        certified 5 Gbps USB-C cable in a USB-3 port directly on the motherboard.
+     2. **Unity submits 2-8 app fps against 72 fps presented.**
+        `num_pc_presented_frames` ≈ 72/s while `num_completed_app_frames` is 2-8/s, with
+        223-1090 `num_pc_app_early_reprojected_frames` and 10-83 `lost_pc_app_frames` per
+        minute. The compositor is reprojecting nearly every frame, and reprojection
+        corrects *head* motion only, not object motion — so moving objects (both
+        characters) smear while the static room looks correct. That is exactly the
+        reported symptom.
+     **Applied 2026-11-14 (user's call): Standalone quality level 5 (Ultra) -> 2 (Medium),
+     i.e. the same level Android/Quest builds use.** Done through the Editor
+     (`SerializedObject` on the QualitySettings singleton + `SaveAssets`) so Unity's
+     in-memory state matches the file, then `SetQualityLevel(2, true)`. What it buys:
+     shadows soft->hard, shadow resolution 2->0, cascades 4->1, shadow distance 150->20 m,
+     realtime reflection probes off, soft particles/vegetation off, realtime GI CPU
+     100->25, LOD bias 2->0.7. Side benefit: the Editor-over-Link preview now matches what
+     the device build actually renders. **MSAA is unchanged at 4** — it lives in
+     `Assets/Universal Render Pipeline Asset.asset`, and no quality level overrides the
+     URP asset (`renderPipeline` appears 0 times in QualitySettings), so the quality level
+     cannot touch it. Saving also re-serialized the asset to `serializedVersion: 4`
+     (new zero-valued `adaptiveVsync*` fields, a `Nintendo Switch 2` entry) — Unity's own
+     format upgrade, not a settings change. **Not yet re-measured in the headset.**
+
+     Still untried, in order of expected payoff: **USB-3 cable** (the big one — USB 2 is a
+     transport ceiling no project setting can lift); drop URP `m_MSAA: 4` to 2;
+     close/minimise the Scene view during Play so the Editor renders one view instead of
+     two. `runInBackground` was checked and is already `1`, so Editor focus is not the
+     cause.
+   - Side finding: MRUK found **0 room anchors over Link** (`Anchor search complete with
+     0 anchors` → fell back to the bundled JSON room); Breeze threw `Failed to create
+     agent because there is no valid NavMesh` + 6 `NullReferenceException`s. That's the
+     sample scene's problem, not PoseReceiver's, but it means step 5's real-room geometry
+     needs the headset's Space Setup scan to come through Spatial-Data-over-Link.
+   - Note: `EnvironmentDepth`'s `_systemOcclusionEnabled`/`_systemMaxEnvOcclusion`/
+     `_systemMaxOpacity` fields were dropped on scene save — they don't exist in the
+     installed Meta XR SDK 209. `docs/mruk_depth_occlusion_notes.md` step 1 still
+     references `_systemOcclusionEnabled`; stale for step 6.
+5. Feed MRUK room geometry → motionbricks, controller ray hit → target position. Same
+   socket, opposite direction.
+   **Premise corrected 2026-11-14: there is no "motionbricks obstacles" format to find.**
+   Grepped the whole motionbricks repo — it has **no obstacle, avoidance, or pathfinding
+   API at all**. The only `obstacle` hits are *motion clip filenames*
+   (`soma/avoidance/neutral_avoid_obstacle_*.bvh`, `soma/jump/jump_over_obstacle_*.bvh`),
+   i.e. animation data, not routing. `runtime_api.md` exposes exactly one steering
+   concept: **generate toward one to four target poses**, placed in world space by moving
+   the pose root (`place_target_poses()` in `motionbricks/runtime/target_pose.py`).
+   So **routing is our job, not motionbricks'.** The good news is Unity already does it:
+   MRUK builds a real NavMesh from the room scan and `Breeze` navigates it on-device
+   today. The shape of step 5 is therefore:
+   - Unity: controller ray hit → `NavMesh.CalculatePath` → waypoint list.
+   - **New reverse channel Unity → Python** (does not exist yet; `PoseReceiver` is
+     receive-only). Add a second UDP socket, opposite direction.
+   - Sender: replace the hardcoded `steering(time)` with "direction toward next waypoint".
+     `canonical_target`/`place_target_poses` already take a direction + ground position,
+     so this end is a small change.
+   Obstacle *avoidance* then falls out of the NavMesh for free — the path already routes
+   around scanned geometry; motionbricks just walks it.
+   **Full handoff doc, written for a fresh agent: `docs/step5_room_geometry_to_motion.md`**
+   — exact file:line touchpoints, the Unity→motionbricks coordinate inverse, a wire-format
+   proposal, 8 traps, and a 5-stage build order where each stage is independently
+   verifiable. Start there, not here.
    **Done when:** moving the controller ray to a new point visibly redirects the rig's
    live motion toward it, and placing a real-world obstacle (per MRUK scan) causes the
    generated motion to route around it in the headset.
 6. Apply Depth-API occlusion material to the rig (`docs/mruk_depth_occlusion_notes.md`).
+   **This is now the blocking gap — everything it depends on is verified working.**
+   On-device the Depth API is live (`XR_META_environment_depth: Version=2`,
+   `USE_SCENE: granted=true`) and `Breeze` is correctly occluded; DonQuixote is not,
+   because she has no materials at all (only `DonQuixote.fbx` / `Don2Sketchfab.fbx`), so
+   Unity gave her standard URP Lit. Extract her textures, build a material on
+   `MRUKOccludedLit.shadergraph`, re-map per the property table in the notes, set
+   `_EnvironmentDepthBias = 0.09`, assign, rebuild, reinstall. **Build to a separate APK
+   path so the known-good `Builds/SnackClubHaven.apk` stays installable as a fallback.**
    **Done when:** on-device, the rig is correctly occluded by real-world geometry it
    walks behind (verified visually, matching the known-good values in
    `docs/mruk_depth_occlusion_notes.md`) — not just assigned the material.
-7. LLM dialogue: TTS + lipsync is the hard part, not the API call. Prototype text→speech
-   playback on the character first; pick a Claude model via the `claude-api` skill.
+7. LLM dialogue: TTS + lipsync is the hard part, not the API call.
+   **Status 2026-11-14 — further along than this list implied, but PC-side only.** Already
+   built in `tools/`: `miku_client.py` (456 lines; Ollama token streaming + real-time TTS
+   audio over SSE from a second machine at `172.16.1.27:8765`), `voice_input.py`
+   (push-to-talk → local Whisper → `miku_client.send_and_stream`), `fake_miku_server.py`
+   (test double so the SSE path runs without the second machine) and
+   `test_voice_input.py`. Last `whisper_test.log` run transcribed `''` — the model
+   downloaded and ran, but captured no speech, so mic capture is unverified.
+   **Note this uses Ollama, not the Claude API** — the "pick a Claude model via the
+   `claude-api` skill" line above is superseded unless you deliberately switch back.
+   **What is actually left:** all of the above plays audio on the **PC**, while the
+   character now renders in an **on-device APK**. Either (a) accept PC-side audio — fine
+   if the livestream mixes PC audio, and it costs nothing — or (b) stream audio to the
+   Quest app, which is what on-device lipsync (OVRLipSync visemes) would need.
    **Done when:** a hardcoded line of dialogue plays as audible speech synced to the
    character on-device (lipsync can lag; audio playback cannot), via one manual run —
    record which Claude model was picked and why.
-8. Only after 1–7 work on one rig: repeat step 1 for the other rigs.
-   **Done when:** each of the other 8 rigs individually passes step 1's check (all 19
-   required `HumanBodyBones` resolved, no red entries) — log any rig that doesn't and
-   what's wrong (multiple roots, extra prop bones, etc.) rather than silently skipping it.
+
+   **Partial progress, 2026-11-14 — speech-in half built and tested on desktop; still not
+   the Claude-model path, and not yet wired to the character on-device.** Added
+   `tools/miku_client.py`, `tools/voice_input.py` (push-to-talk: press Enter, speak, press
+   Enter, local Whisper transcribes, text is handed to `send_and_stream`), plus
+   `tools/fake_miku_server.py` + `tools/test_miku_client.py`/`test_voice_input.py` as the
+   runnable self-checks.
+
+   **Important deviation from the plan above, not yet resolved:** the server this talks to
+   (a second machine on the LAN, `172.16.1.27:8765`) runs **Ollama**
+   (`huihui_ai/qwen3.5-abliterated:2b`) + Edge-TTS/RVC for voice, **not Claude**. This is
+   the text-generation+TTS path that was actually built and tested; picking a Claude model
+   via the `claude-api` skill (as this step asks) is still open — either swap this server's
+   LLM call for Claude, or treat Ollama as a placeholder and revisit. Don't assume "LLM
+   dialogue" means Claude until that's decided.
+
+   **Verified working, against the real second machine (not just `fake_miku_server.py`):**
+   - `python tools/miku_client.py "<prompt>" --server http://172.16.1.27:8765` round-trips
+     text + audio for real — e.g. one run: prompt → full reply text + 812 KB of synthesized
+     audio in **9.04s** total.
+   - **It's genuinely streamed, not buffered-then-dumped** (timestamped
+     `MikuClient.stream_chat` callbacks, one run): text tokens arrive almost immediately
+     (0.47s–0.66s after sending, word-by-word from Ollama); audio arrives as separate
+     per-sentence WAV chunks only once each sentence's TTS finishes (sentence 1's audio at
+     3.90s, sentence 2's at 16.17s) — audio for a later sentence doesn't block on an earlier
+     one, so playback can start before the whole reply is synthesized.
+   - `tools/voice_input.py`'s recording half works against the real mic (`sounddevice`
+     `InputStream`, verified capturing real samples) and Whisper transcription works
+     (`tiny` model; `base` model's first download hit a corrupted/truncated fetch — SHA256
+     checksum mismatch — fixed by deleting the bad `~/.cache/whisper/base.pt` and letting it
+     re-download, or just use `--whisper-model tiny` on a flaky connection).
+   - **Not yet tried:** real speech into `voice_input.py` end-to-end (only tested with
+     silence, which correctly transcribes to `''`); playback on the actual character
+     on-device in Unity/Quest (everything above ran on desktop via `sounddevice`, not
+     through `PoseReceiver`'s rig or any lipsync); and the Claude-model swap mentioned above.
+8. ~~Repeat step 1 for the other rigs.~~ **CUT 2026-11-14 — scope is DonQuixote only.**
+   The other 8 rigs in `Rigs/` stay source FBX; don't spend time on them. If one is ever
+   revived, what Don needed was: import as Humanoid (all 19 required `HumanBodyBones`
+   resolved), a **per-rig import scale** (Don's `globalScale` is `0.004476024`, calibrated
+   so rest hips match SOMA's `1.012 m` — the default `15.6` put her at ~3500x), and her
+   own `MRUKOccludedLit` material (step 6). The SOMA→`HumanBodyBones` table in step 2 and
+   `PoseReceiver.cs`'s T-pose alignment are rig-agnostic and need no per-rig work.
 
 ---
 
@@ -323,7 +560,8 @@ separate repo (`motionbricks`); everything else now lives in **this one repo/fol
   2026-11-14: `DonQuixote/`, `Faust/`, `carmen-limbus-company/`,
   `ishmael-v2-limbus-company/`, `joker-persona-5/`, `FreddyFazbear/` (Sketchfab-style
   `source/` + `textures/` layout), plus `KasaneTeto.fbx`, `Seek/Seek.fbx`,
-  `Master Chief/` (fbx + dae). Only DonQuixote is the bring-up target; the rest wait.
+  `Master Chief/` (fbx + dae). **DonQuixote is the only rig in scope — step 8 was cut
+  2026-11-14. The other 8 are dead weight unless scope changes.**
 - `Assets/`, `Packages/`, `ProjectSettings/` — the actual Unity/MRUK project. This was
   merged in 2026-11-14 from a separate `Unity-MRUtilityKitSample` repo (Meta's MRUK
   sample, history intentionally stripped — hackathon, didn't need to keep pulling
@@ -388,14 +626,16 @@ runtime pipeline.
    `COPY_ROTATION`/`COPY_LOCATION` constraints, bakes with `nla.bake`, then deletes the
    duplicate+constraints. Fine for a clip check; irrelevant for live.
 
-## Live streaming (BUILT and working in the desktop Editor as of 2026-11-14 — step 4)
+## Live streaming (WORKING on-device as of 2026-11-14 — step 4 closed, NOT over Link)
 
 Live pose goes **motionbricks → UDP → Unity**, no Blender in the loop. The rig renders in
 Unity on Quest, so that's where the bones get driven.
 
 1. **Processes:** motionbricks is its own Python app (`motionbricks/app/runtime`, imgui
-   window). Unity is a separate process (Editor over Quest Link on PC first, then on-device
-   build). A local socket is required — resolved 2026-11-14, previously an open question.
+   window). Unity is a separate process. **The deployment is an on-device APK, not the
+   Editor over Quest Link** — Link was tried and abandoned (USB 2.0 ceiling, 2-8 app fps;
+   see step 4). A socket is required either way, but it is **not** loopback on-device: the
+   sender takes `--host <headset Wi-Fi IP>` and the datagrams cross the LAN.
 2. **Payload, 30 Hz, one UDP datagram per frame:** root position + one quaternion per SOMA
    joint, decoded from `pred_global_motions`. Keep it tiny and ours. Don't reuse Rokoko's
    live protocol — it carries capture-hardware skeleton/face/prop/tracker data we don't
@@ -414,11 +654,12 @@ Unity on Quest, so that's where the bones get driven.
 
 ## Not yet built here
 
-MRUK room-scan ingestion, controller→target placement, and the LLM dialogue call are
-all in scope for this bridge project but not yet implemented in this repo — motionbricks
-produces the obstacle/target and pose data this project needs to consume, and the LLM
-dialogue call is unaddressed. Don't read "not covered" as "someone else's problem" —
-it's this project's backlog.
+MRUK room-scan ingestion and controller→target placement are in scope for this bridge
+project but not yet implemented in this repo. The LLM dialogue call is partially
+addressed — see step 7 above (`tools/voice_input.py` + `tools/miku_client.py`: speech in
+→ Whisper → a LAN Ollama+TTS server → audio out, tested working on desktop) — but it
+talks to Ollama, not Claude, and isn't wired to a character on-device yet. Don't read
+"not covered" as "someone else's problem" — it's this project's backlog.
 
 ## Depth-API occlusion (Unity/MRUK, validated 2026-11-14)
 
@@ -427,5 +668,9 @@ setup is already validated in this project's `Assets/MRUKSamples/NavMesh` sample
 (`BreezeCharacter`) — not a separate repo anymore, it's right here. Full notes,
 shader/property mapping, and known-good values: `docs/mruk_depth_occlusion_notes.md`.
 Applying it to the `Rigs/` characters is still open — they're source FBX, not yet
-imported into `Assets/` as Unity materials, so there's nothing to swap onto until
-DonQuixote is brought into a scene (Next steps 1 → 6).
+imported into `Assets/` as Unity materials. **Updated 2026-11-14:** DonQuixote is now in
+`NavMesh.unity` and running on-device, but still has **no materials at all** (her folder
+holds only the two FBXs), so Unity gave her standard URP Lit and she is **not** occluded —
+confirmed in the headset. `Breeze` in the same scene *is* occluded. This is the whole of
+the remaining gap; see the step-6 section of `docs/mruk_depth_occlusion_notes.md` for the
+exact swap. Also note Depth API does not work over Link at all — on-device only.
