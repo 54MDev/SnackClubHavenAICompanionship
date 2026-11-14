@@ -1,10 +1,11 @@
 # MRUK Depth-API occlusion notes (2026-11-14)
 
-Where this fits in the pipeline (see `CLAUDE.md`): this is the **Quest/MRUK side** —
-the piece that owns real-world room geometry. Tested in the sibling repo
-`Unity-MRUtilityKitSample`, on the `MRUKSamples/NavMesh` sample scene/character
-(`BreezeCharacter`), not in this repo directly — no Unity project lives here, just
-rig assets. Recorded here so a future session doesn't have to re-derive it.
+Where this fits (see `CLAUDE.md`): this repo is the bridge project tying MRUK,
+motionbricks, and these rigs together. The Unity/MRUK project now lives directly in
+this repo's `Assets/`/`Packages`/`ProjectSettings` (merged in from a separate
+`Unity-MRUtilityKitSample` repo on 2026-11-14) — occlusion was tested there, on the
+`MRUKSamples/NavMesh` sample scene/character (`BreezeCharacter`), before the merge.
+Recorded here so a future session working on this bridge doesn't have to re-derive it.
 
 ## What was validated
 
@@ -44,24 +45,25 @@ end on the `Breeze` character in `NavMesh.unity`.
    across all three sample characters (Oppy, Flame, Breeze) in this SDK sample —
    treat it as the known-good default, tune per-character only if flicker shows up.
 5. Reference material: `Breeze.mat` in
-   `Unity-MRUtilityKitSample/Assets/MRUKSamples/NavMesh/BreezeCharacter/` (also
-   mirrored as `DepthOcclusion.md` next to it in that repo).
+   `Assets/MRUKSamples/NavMesh/BreezeCharacter/` (also mirrored as `DepthOcclusion.md`
+   next to it).
 
 ## Implication for the SOMA-driven rigs here
 
-If `DonQuixote`/`Faust`/`KasaneTeto` need to be occluded by real-world geometry
-when deployed through MRUK (same room-scan→obstacle pipeline described in
-`CLAUDE.md`), each rig's material needs the same treatment: swap to
-`MRUKOccludedLit.shadergraph`, re-map its textures per the table above, and set
-`_EnvironmentDepthBias`. **Not done yet** — these rigs currently only have
-source FBX/textures, no Unity materials, so there's nothing to swap until they're
-actually brought into a Unity/MRUK scene.
+For these rigs to be occluded by real-world geometry when deployed through MRUK
+(same room-scan→obstacle pipeline described in `CLAUDE.md`), each rig's material
+needs the same treatment: swap to `MRUKOccludedLit.shadergraph`, re-map its textures
+per the table above, and set `_EnvironmentDepthBias`. **Not done yet** — this is part
+of this bridge project's backlog, not someone else's piece. `DonQuixote`/`Faust`/
+`KasaneTeto` currently only have source FBX/textures, no Unity materials, so there's
+nothing to swap until they're actually brought into a Unity/MRUK scene as part of
+building out this bridge.
 
 ## Not covered by this doc
 
 - System-level compositor occlusion (`_systemOcclusionEnabled = 1` path) — untested
   here, deliberately left off in favor of the shader path.
 - Hand occlusion (`_removeHands`) — left at default (`0`), not exercised.
-- Everything else in `Unity-MRUtilityKitSample`'s working tree changes (Android
-  Gradle Plugin bump to 8.10.0, misc URP/ProjectSettings churn) — SDK-upgrade
-  noise unrelated to occlusion, not worth carrying over here.
+- Everything else in the former `Unity-MRUtilityKitSample` working-tree changes
+  (Android Gradle Plugin bump to 8.10.0, misc URP/ProjectSettings churn) — SDK-upgrade
+  noise unrelated to occlusion, not specific to this doc's topic.

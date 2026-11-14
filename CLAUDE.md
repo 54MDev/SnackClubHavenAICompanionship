@@ -1,18 +1,30 @@
 # Snack Club Haven — AI Companionship
 
-Custom character rigs (`Rigs/DonQuixote`, `Rigs/Faust`, `Rigs/KasaneTeto.fbx`) meant to be
-driven live by **motionbricks** (separate repo: `motionbricks`, real-time human-motion
-generation) for a VR livestreaming setup. This file is knowledge carried over from a
-motionbricks debugging session (2026-11-14) — read it before doing retargeting/livestream
-work here. Full session notes: `motionbricks/docs/live_retargeting_notes.md`.
+**This is the bridge project**: it owns tying Meta Quest MRUK (room-scan geometry),
+motionbricks (real-time human-motion generation), these custom character rigs, and the
+LLM dialogue call into one live VR-livestreaming pipeline. motionbricks itself stays a
+separate repo (`motionbricks`); everything else now lives in **this one repo/folder**:
 
-## The pipeline this project is one piece of
+- `Rigs/` — source character rigs (`DonQuixote`, `Faust`, `KasaneTeto.fbx`), not yet
+  Unity assets (see below).
+- `Assets/`, `Packages/`, `ProjectSettings/` — the actual Unity/MRUK project. This was
+  merged in 2026-11-14 from a separate `Unity-MRUtilityKitSample` repo (Meta's MRUK
+  sample, history intentionally stripped — hackathon, didn't need to keep pulling
+  upstream updates). Open this folder itself in Unity Hub as the project root.
+- `docs/` — notes carried over from testing in that former repo, before the merge.
+
+This file is knowledge carried over from a motionbricks debugging session (2026-11-14)
+— read it before doing retargeting/livestream work here. Full session notes:
+`motionbricks/docs/live_retargeting_notes.md`.
+
+## The pipeline this project bridges
 
 - Meta Quest MRUK room-scan → real-world geometry → motionbricks obstacles/targets.
 - motionbricks generates human motion live, conditioned on controller pointing, avoiding
   that geometry. Output is **SOMA** skeleton pose data (`pred_global_motions`).
 - SOMA's pose needs to drive one of **these** custom rigs, live, not baked.
-- Character also talks via an LLM call (voice/dialogue) — separate, unaddressed piece.
+- Character also talks via an LLM call (voice/dialogue) — part of this bridge, not yet
+  built here.
 
 ## Why these rigs need retargeting (not a straight name match)
 
@@ -73,15 +85,20 @@ just a function call, no socket), or separate processes (then an actual local so
 is needed)? Pin this down before building the bridge — it changes how much of "the
 bridge" is real work.
 
-## Not covered by this project
+## Not yet built here
 
 MRUK room-scan ingestion, controller→target placement, and the LLM dialogue call are
-separate pieces of the larger bridge project and live elsewhere (motionbricks / app
-layers), not here.
+all in scope for this bridge project but not yet implemented in this repo — motionbricks
+produces the obstacle/target and pose data this project needs to consume, and the LLM
+dialogue call is unaddressed. Don't read "not covered" as "someone else's problem" —
+it's this project's backlog.
 
-## Depth-API occlusion (Unity/MRUK side, validated 2026-11-14)
+## Depth-API occlusion (Unity/MRUK, validated 2026-11-14)
 
 If these rigs end up occluded by real-world room geometry on Quest, the Unity-side
-setup is already validated (in sibling repo `Unity-MRUtilityKitSample`, not here —
-these rigs have no Unity materials yet). Full notes, shader/property mapping, and
-known-good values: `docs/mruk_depth_occlusion_notes.md`.
+setup is already validated in this project's `Assets/MRUKSamples/NavMesh` sample scene
+(`BreezeCharacter`) — not a separate repo anymore, it's right here. Full notes,
+shader/property mapping, and known-good values: `docs/mruk_depth_occlusion_notes.md`.
+Applying it to `DonQuixote`/`Faust`/`KasaneTeto` is still open — they're source FBX in
+`Rigs/`, not yet imported into `Assets/` as Unity materials, so there's nothing to swap
+onto until they're actually brought into a scene.
