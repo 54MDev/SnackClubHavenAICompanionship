@@ -504,6 +504,31 @@ Plan review findings first, then ordered steps.
    **Done when:** on-device, the rig is correctly occluded by real-world geometry it
    walks behind (verified visually, matching the known-good values in
    `docs/mruk_depth_occlusion_notes.md`) — not just assigned the material.
+   **MET 2026-11-14 — user in headset: "Works perfectly."** Textures AND occlusion both
+   landed in one pass (the occlusion shader uses different property names, so doing
+   textures first would have meant re-mapping them).
+   - **The real problem was missing TEXTURES, not missing materials.** Her 5 materials
+     (`DonB`, `DonF`, `DonH`, `DonW`, `OL`) are embedded in `DonQuixote.fbx`, hence
+     read-only, all default URP/Lit at flat grey `0.8` — that grey is what looked
+     "untextured". The PNGs were in **`Rigs/DonQuixote/textures/`, outside `Assets/`**
+     (Sketchfab-style `source/`+`textures/` download; only the FBX had been copied in), so
+     Unity had never seen them. Copied to `Assets/Rigs/DonQuixote/textures/`.
+   - 5 new materials in `Assets/Rigs/DonQuixote/Materials/` on
+     `Shader Graphs/MRUKOccludedLit` (shader guid verified identical to `Breeze.mat`'s),
+     assigned **by original material name, not slot index** — 7 slots across
+     `Don.002` (5) and `Circle` (2). `_Color` white (the FBX grey would have darkened every
+     texture), `_SmoothnessMult` 0.15 (flat anime maps; Breeze's 0.87 reads as plastic).
+   - **No normal or metallic maps exist in the download**, so `_Normal` and
+     `_MetallicSmoothness` stay empty. She reads flatter than Breeze by nature of the
+     source art.
+   - **`_EnvironmentDepthBias` is NOT set and cannot be:** the shadergraph declares it zero
+     times, so `SetFloat` is a silent no-op. The `0.09` in `Breeze.mat` is a leftover from
+     an older shader doing nothing. Occlusion runs off the global keywords
+     `EnvironmentDepthManager` sets. If the real/virtual edge ever flickers, that knob does
+     not exist here — switch to the SDK's `Shaders/EnvironmentDepth/OcclusionLit.shader`,
+     which does expose it. Both this and `_systemOcclusionEnabled` were stale instructions
+     in `docs/mruk_depth_occlusion_notes.md`, now corrected there.
+   - APK: `Builds/SnackClubHaven-step6.apk`; earlier builds kept installable.
 7. LLM dialogue: TTS + lipsync is the hard part, not the API call.
    **Status 2026-11-14 — further along than this list implied, but PC-side only.** Already
    built in `tools/`: `miku_client.py` (456 lines; Ollama token streaming + real-time TTS

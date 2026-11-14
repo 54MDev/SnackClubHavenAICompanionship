@@ -96,3 +96,6 @@ Assets/Resources/DevAgentSettings.asset.meta
 # Meta Quest agentic tooling: keep VS Code/Cursor workspace recommendations
 !.vscode/extensions.json
 !.vscode/mcp.json
+
+# APK build output - large binaries, rebuildable from source
+/Builds/

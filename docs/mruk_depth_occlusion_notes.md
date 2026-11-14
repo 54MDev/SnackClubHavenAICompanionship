@@ -45,10 +45,17 @@ end on the `Breeze` character in `NavMesh.unity`.
    Everything else from the old shader (emission, detail maps, occlusion map,
    workflow mode, surface/blend settings, etc.) gets dropped — this shader graph
    doesn't expose those slots.
-4. **`_EnvironmentDepthBias ≈ 0.09`** — pushes the occlusion boundary slightly
-   so the real/virtual edge doesn't z-fight/flicker. `0.09` is the value used
-   across all three sample characters (Oppy, Flame, Breeze) in this SDK sample —
-   treat it as the known-good default, tune per-character only if flicker shows up.
+4. ~~**`_EnvironmentDepthBias ≈ 0.09`**~~ — **STALE as of 2026-11-14, second dead
+   instruction in this doc.** `MRUKOccludedLit.shadergraph` declares
+   `_EnvironmentDepthBias` **zero times**, so `Material.SetFloat` on it is a silent no-op
+   and the value is dropped on serialization. The `0.09` visible in `Breeze.mat` is a
+   leftover from an older shader and is doing nothing. The property does still exist, but
+   in the SDK's *other* occlusion shaders — `Shaders/EnvironmentDepth/OcclusionLit.shader`,
+   `OcclusionSurfaceLit.shader`, `OcclusionUnlit.shader` — which are not this shadergraph.
+   **Nothing to set.** Occlusion works through the global shader keywords
+   `EnvironmentDepthManager` sets from `_occlusionShadersMode`. If the real/virtual edge
+   flickers, the fix is elsewhere (or switch to one of the SDK shaders above, which do
+   expose a bias).
 5. Reference material: `Breeze.mat` in
    `Assets/MRUKSamples/NavMesh/BreezeCharacter/` (also mirrored as `DepthOcclusion.md`
    next to it).
@@ -87,11 +94,31 @@ occluded (she carries `MRUKOccludedLit` with `_EnvironmentDepthBias: 0.09`), whi
 renders with a shader that has no occlusion sampling in it. **Not a bug, not a
 regression — the material swap has simply never been done for her.**
 
-To close step 6 for Don: extract her textures from the FBX, make a material on
-`MRUKOccludedLit.shadergraph` (it exists at the path in step 2), re-map per the property
-table above, set `_EnvironmentDepthBias = 0.09`, assign it to her renderers, then rebuild
-and reinstall the APK. Build to a *separate* output path so the known-good
-`Builds/SnackClubHaven.apk` stays installable as a fallback. The other 8 rigs are **out of scope** (step 8
+**DONE for Don, 2026-11-14.** What it actually took, and the two things the old version of
+this doc got wrong about her:
+
+- **She was never missing materials — she was missing TEXTURES.** Her 5 materials (`DonB`,
+  `DonF`, `DonH`, `DonW`, `OL`) are **embedded in `DonQuixote.fbx`** and therefore
+  read-only, all default `Universal Render Pipeline/Lit` at flat grey `0.8` with no maps.
+  That grey is why she looked untextured.
+- **The textures were outside `Assets/`.** They sit in `Rigs/DonQuixote/textures/` (a
+  Sketchfab-style `source/` + `textures/` download) and only the FBX had been copied into
+  `Assets/Rigs/DonQuixote/`, so Unity had never seen them. Copied into
+  `Assets/Rigs/DonQuixote/textures/`. Four base-colour maps, **no normal or metallic maps**,
+  so `_Normal` and `_MetallicSmoothness` stay empty.
+- Because the FBX materials are read-only, 5 new assets were created in
+  `Assets/Rigs/DonQuixote/Materials/` (`<name>_Occluded.mat`) on
+  `Shader Graphs/MRUKOccludedLit` — shader guid verified identical to `Breeze.mat`'s.
+  `_Albedo` mapped by material name: `DonB`->body, `DonF`->face, `DonH`->hair,
+  `DonW`->weapon; `OL` gets none (it is an outline material in the source, but imports as
+  an ordinary cull-Back Lit material, so converting it is harmless).
+  `_Color` set to white — the FBX's grey `0.8` would have darkened every texture.
+  `_SmoothnessMult = 0.15` because these are flat anime base-colour maps; Breeze's `0.87`
+  would read as plastic. Tune this if she looks too matte.
+- Assignment is **by original material name, not slot index**, so slot order cannot be got
+  wrong: `Don.002` (SkinnedMeshRenderer) has 5 slots `[DonB, DonW, DonH, DonF, OL]` and
+  `Circle` (MeshRenderer) has 2 `[DonW, OL]` — 7 slots swapped in total.
+- Built to `Builds/SnackClubHaven-step6.apk`, keeping earlier APKs installable. The other 8 rigs are **out of scope** (step 8
 cut 2026-11-14) — only Don needs this material.
 
 ## Not covered by this doc
