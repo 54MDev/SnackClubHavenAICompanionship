@@ -1,0 +1,659 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Hatsune Miku Endpoint Config</title>
+  <style>
+    :root {
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      color: #e5f5f4;
+      background: #0d161c;
+      color-scheme: dark;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 0; }
+    header {
+      background: #13222a;
+      border-bottom: 1px solid #23434c;
+      padding: 16px 24px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 12px;
+    }
+    h1 {
+      font-size: 1.6rem;
+      margin: 0;
+      color: #64e3d3;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .badge {
+      font-size: 0.72rem;
+      background: #18423f;
+      color: #72f5e3;
+      border: 1px solid #3ebfaa;
+      padding: 3px 8px;
+      border-radius: 12px;
+      text-transform: uppercase;
+      font-weight: 700;
+      letter-spacing: 0.5px;
+    }
+    main {
+      max-width: 1200px;
+      margin: auto;
+      padding: 24px 20px;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: 1.4fr 1fr;
+      gap: 24px;
+    }
+    .card {
+      background: #15242c;
+      border: 1px solid #284750;
+      border-radius: 14px;
+      padding: 22px;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+    }
+    .card h2 {
+      margin-top: 0;
+      font-size: 1.25rem;
+      color: #8cf1e4;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    label {
+      display: block;
+      font-size: 0.86rem;
+      font-weight: 600;
+      margin: 14px 0 6px;
+      color: #b0dbd7;
+    }
+    input[type=text], select, textarea {
+      width: 100%;
+      background: #0d181e;
+      color: #e5fbf9;
+      border: 1px solid #365c66;
+      border-radius: 8px;
+      padding: 10px 12px;
+      font: inherit;
+    }
+    input[type=text]:focus, select:focus, textarea:focus {
+      outline: none;
+      border-color: #64e3d3;
+      box-shadow: 0 0 0 2px rgba(100,227,211,0.25);
+    }
+    input[type=range] {
+      width: 100%;
+      accent-color: #55decb;
+    }
+    .value {
+      float: right;
+      color: #74f7e6;
+      font-weight: 700;
+    }
+    .btn-row {
+      display: flex;
+      gap: 12px;
+      margin-top: 18px;
+    }
+    button {
+      background: #55decb;
+      color: #062b25;
+      border: 0;
+      border-radius: 8px;
+      font-weight: 700;
+      padding: 12px 20px;
+      cursor: pointer;
+      font-size: 0.95rem;
+      transition: all 0.15s ease;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+    button:hover:not(:disabled) {
+      background: #78ffed;
+      transform: translateY(-1px);
+    }
+    button:disabled {
+      opacity: 0.55;
+      cursor: not-allowed;
+    }
+    .btn-secondary {
+      background: #25444e;
+      color: #d8fbf6;
+      border: 1px solid #416f7c;
+      padding: 10px 14px;
+      font-size: 0.86rem;
+    }
+    .btn-secondary:hover:not(:disabled) {
+      background: #345c68;
+    }
+    .btn-stop {
+      background: #e05260;
+      color: #fff;
+    }
+    .btn-stop:hover:not(:disabled) {
+      background: #ff6676;
+    }
+    /* Chat & Transcript */
+    #chatHistory {
+      height: 380px;
+      overflow-y: auto;
+      border: 1px solid #233e46;
+      background: #0b1419;
+      border-radius: 10px;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .msg {
+      padding: 12px 16px;
+      border-radius: 12px;
+      max-width: 85%;
+      line-height: 1.45;
+      font-size: 0.94rem;
+      word-break: break-word;
+    }
+    .msg-user {
+      align-self: flex-end;
+      background: #1c454e;
+      color: #e8ffff;
+      border-bottom-right-radius: 3px;
+    }
+    .msg-miku {
+      align-self: flex-start;
+      background: #1b2f38;
+      border: 1px solid #2c5963;
+      color: #e5fbf9;
+      border-bottom-left-radius: 3px;
+    }
+    .msg-header {
+      font-size: 0.75rem;
+      font-weight: 700;
+      color: #64e3d3;
+      margin-bottom: 4px;
+    }
+    .streaming-cursor {
+      display: inline-block;
+      width: 7px;
+      height: 14px;
+      background: #64e3d3;
+      margin-left: 4px;
+      animation: blink 0.8s infinite;
+      vertical-align: middle;
+    }
+    @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
+    .hint {
+      font-size: 0.8rem;
+      color: #8daeab;
+      margin: 6px 0 0;
+    }
+    /* Visualizer Pill */
+    .status-bar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-top: 14px;
+      font-size: 0.88rem;
+      color: #9cd5cf;
+    }
+    .pulse-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: #4de1cf;
+      box-shadow: 0 0 10px #4de1cf;
+    }
+    .pulse-dot.speaking {
+      animation: pulse 1s infinite alternate;
+      background: #2aff95;
+      box-shadow: 0 0 12px #2aff95;
+    }
+    @keyframes pulse { from { transform: scale(0.85); opacity: 0.7; } to { transform: scale(1.3); opacity: 1; } }
+    details {
+      margin-top: 16px;
+      border: 1px solid #284750;
+      border-radius: 8px;
+      padding: 10px 14px;
+      background: #0f1c22;
+    }
+    summary {
+      cursor: pointer;
+      color: #8cf1e4;
+      font-weight: 600;
+      font-size: 0.92rem;
+    }
+    .code-box {
+      background: #080f13;
+      border: 1px solid #233e46;
+      border-radius: 6px;
+      padding: 10px;
+      font-family: monospace;
+      font-size: 0.82rem;
+      color: #6ae5d6;
+      overflow-x: auto;
+      margin-top: 8px;
+      user-select: all;
+    }
+    @media (max-width: 900px) {
+      .grid { grid-template-columns: 1fr; }
+      #chatHistory { height: 300px; }
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>🎤 Hatsune Miku Realtime AI & TTS <span class="badge">Streaming Active</span></h1>
+  <div>
+    <span id="ollamaStatusBadge" class="badge" style="background:#203c44; border-color:#3a6f7b;">Checking Ollama…</span>
+  </div>
+</header>
+
+<main>
+  <div class="grid">
+    <!-- Chat & Audio Stream Section -->
+    <section class="card">
+      <h2>Miku Live Conversation</h2>
+      <div id="chatHistory">
+        <div class="msg msg-miku">
+          <div class="msg-header">Hatsune Miku</div>
+          Hello! I'm Hatsune Miku! I'm connected to the local AI and ready to talk in real-time. Type anything to start!
+        </div>
+      </div>
+
+      <div class="status-bar">
+        <div class="pulse-dot" id="pulseDot"></div>
+        <span id="statusText">Ready for input.</span>
+      </div>
+
+      <label for="promptInput">Message for Miku</label>
+      <textarea id="promptInput" rows="3" placeholder="Ask Miku anything, e.g. 'Tell me a funny story!' or 'What is your favorite song?'">Hello Miku! Tell me a cheerful story about a digital concert!</textarea>
+
+      <div class="btn-row">
+        <button id="sendBtn" type="button">⚡ Talk with Miku</button>
+        <button id="stopBtn" class="btn-stop" type="button" disabled>⏹ Stop</button>
+      </div>
+
+      <!-- Raw Stream API helper -->
+      <details>
+        <summary>External Audio Stream Endpoint (curl / ffplay / mpv)</summary>
+        <p class="hint">Stream live converted audio directly into any audio player or script:</p>
+        <div class="code-box">curl -N "http://127.0.0.1:8765/api/stream?prompt=Hello+Miku" | ffplay -nodisp -autoexit -</div>
+        <p class="hint">For speaking custom text without Ollama, add <code>&ollama=false</code>:</p>
+        <div class="code-box">curl -N "http://127.0.0.1:8765/api/stream?prompt=Welcome+to+the+show!&ollama=false" | mpv -</div>
+      </details>
+    </section>
+
+    <!-- Settings & Model Configuration Section -->
+    <section class="card">
+      <h2>Audio & Voice Configuration</h2>
+
+      <label for="voicePreset">Voice preset</label>
+      <select id="voicePreset">
+        <option value="en-US-AnaNeural" data-pitch="2" selected>en-US-AnaNeural (Recommended: Youthful / Cute tone)</option>
+        <option value="ja-JP-NanamiNeural" data-pitch="1">ja-JP-NanamiNeural (Japanese: Anime / Vocaloid tone)</option>
+        <option value="en-US-JennyNeural" data-pitch="6">en-US-JennyNeural (Standard Female: needs +6 semitones)</option>
+        <option value="en-US-AriaNeural" data-pitch="5">en-US-AriaNeural (Expressive Female: needs +5 semitones)</option>
+        <option value="en-US-AvaMultilingualNeural" data-pitch="4">en-US-AvaMultilingualNeural (Multilingual)</option>
+        <option value="custom">Custom voice ID…</option>
+      </select>
+
+      <label for="voice">Edge voice ID</label>
+      <input id="voice" type="text" value="en-US-AnaNeural">
+
+      <label for="pitch">Pitch shift <span class="value" id="pitchValue">+2 semitones</span></label>
+      <input id="pitch" type="range" min="-24" max="24" value="2">
+
+      <label for="index_rate">Index strength <span class="value" id="index_rateValue">0.70</span></label>
+      <input id="index_rate" type="range" min="0" max="1" step="0.05" value="0.70">
+
+      <label for="model">RVC model (.pth)</label>
+      <select id="model"></select>
+
+      <label for="index">Feature index (.index)</label>
+      <select id="index"></select>
+
+      <div style="margin-top: 12px;">
+        <button class="btn-secondary" id="refreshBtn" type="button">🔄 Refresh Models</button>
+      </div>
+
+      <!-- Advanced Sound Settings -->
+      <details>
+        <summary>Pitch Algorithm & Advanced Timbre</summary>
+        <label for="method">Pitch detection algorithm</label>
+        <select id="method">
+          <option value="rmvpe" selected>RMVPE (Best vocal stability & quality)</option>
+          <option value="pm">PM (Parselmouth - Ultra-fast)</option>
+        </select>
+
+        <label for="protect">Consonant protection <span class="value" id="protectValue">0.33</span></label>
+        <input id="protect" type="range" min="0" max="0.5" step="0.01" value="0.33">
+
+        <label for="rms">Volume envelope <span class="value" id="rmsValue">1.0</span></label>
+        <input id="rms" type="range" min="0" max="1" step="0.05" value="1.0">
+      </details>
+
+      <!-- Ollama Settings -->
+      <details open style="margin-top: 16px;">
+        <summary>Ollama LLM Settings</summary>
+        <label for="ollamaUrl">Ollama endpoint URL</label>
+        <input id="ollamaUrl" type="text" value="http://172.16.1.52:11434">
+
+        <label for="ollamaModel">Ollama model</label>
+        <select id="ollamaModel">
+          <option value="huihui_ai/qwen3.5-abliterated:2b" selected>huihui_ai/qwen3.5-abliterated:2b</option>
+        </select>
+
+        <p class="hint">⚡ Thinking is forced OFF (<code>"think": false</code>) for zero-latency direct generation.</p>
+
+        <label for="systemPrompt">System persona prompt</label>
+        <textarea id="systemPrompt" rows="3">You are Hatsune Miku! You are cheerful, sweet, enthusiastic, and speak as the famous digital vocaloid pop star. Keep replies concise (1-3 sentences) and lively for speech.</textarea>
+      </details>
+    </section>
+  </div>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+
+// Realtime Web Audio Gapless Player with Scheduled Buffer Queue
+class AudioStreamPlayer {
+  constructor() {
+    this.ctx = null;
+    this.nextStartTime = 0;
+    this.activeSources = [];
+    this.isPlaying = false;
+  }
+
+  init() {
+    if (!this.ctx) {
+      this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+    }
+    if (this.ctx.state === 'suspended') {
+      this.ctx.resume();
+    }
+  }
+
+  stop() {
+    for (const src of this.activeSources) {
+      try { src.stop(); } catch(e) {}
+    }
+    this.activeSources = [];
+    this.nextStartTime = 0;
+    this.isPlaying = false;
+    $('pulseDot').classList.remove('speaking');
+  }
+
+  async queueWavBase64(base64Str) {
+    this.init();
+    const binary = atob(base64Str);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+
+    try {
+      const audioBuffer = await this.ctx.decodeAudioData(bytes.buffer.slice(0));
+      const now = this.ctx.currentTime;
+
+      // Jitter buffer lead time (180ms) if queue was empty or starved
+      if (this.nextStartTime < now) {
+        this.nextStartTime = now + 0.18;
+      }
+
+      const source = this.ctx.createBufferSource();
+      source.buffer = audioBuffer;
+      source.connect(this.ctx.destination);
+      source.start(this.nextStartTime);
+
+      this.nextStartTime += audioBuffer.duration;
+      this.activeSources.push(source);
+      this.isPlaying = true;
+      $('pulseDot').classList.add('speaking');
+
+      source.onended = () => {
+        const idx = this.activeSources.indexOf(source);
+        if (idx !== -1) this.activeSources.splice(idx, 1);
+        if (this.activeSources.length === 0) {
+          this.isPlaying = false;
+          $('pulseDot').classList.remove('speaking');
+          if (activeController === null) {
+            $('statusText').textContent = 'Ready.';
+          }
+        }
+      };
+    } catch (e) {
+      console.error('Audio decode error:', e);
+    }
+  }
+}
+
+const player = new AudioStreamPlayer();
+let activeController = null;
+
+// Sliders and dynamic values
+const sliderIds = ['pitch', 'index_rate', 'protect', 'rms'];
+for (const id of sliderIds) {
+  const el = $(id);
+  const update = () => {
+    let suffix = '';
+    if (id === 'pitch') suffix = el.value >= 0 ? `+${el.value} semitones` : `${el.value} semitones`;
+    else suffix = el.value;
+    $(id + 'Value').textContent = suffix;
+  };
+  el.addEventListener('input', update);
+  update();
+}
+
+// Preset changes
+$('voicePreset').addEventListener('change', () => {
+  const opt = $('voicePreset').selectedOptions[0];
+  if (opt.value !== 'custom') {
+    $('voice').value = opt.value;
+    if (opt.dataset.pitch) {
+      $('pitch').value = opt.dataset.pitch;
+      $('pitch').dispatchEvent(new Event('input'));
+    }
+  }
+});
+
+// Refresh RVC and Ollama Models
+async function refreshAll() {
+  // RVC Models
+  try {
+    const res = await fetch('/api/models');
+    const data = await res.json();
+    for (const [id, key] of [['model', 'models'], ['index', 'indexes']]) {
+      const el = $(id), oldVal = el.value;
+      el.replaceChildren();
+      el.add(new Option(id === 'model' ? 'Select a model' : 'No index', ''));
+      for (const f of data[key]) el.add(new Option(f, f));
+      if (data[key].includes(oldVal)) el.value = oldVal;
+      else if (id === 'model' && data[key].length) el.value = data[key][0];
+      else if (id === 'index' && !el.value && data[key].length) {
+        const match = data[key].find(f => f.toLowerCase().includes('miku')) || data[key][0];
+        if (match) el.value = match;
+      }
+    }
+  } catch (e) {
+    console.error('Could not load RVC models:', e);
+  }
+
+  // Ollama Models
+  const ollamaUrl = $('ollamaUrl').value.trim();
+  try {
+    const res = await fetch('/api/ollama_models?url=' + encodeURIComponent(ollamaUrl));
+    const data = await res.json();
+    if (data.models && data.models.length) {
+      const sel = $('ollamaModel');
+      const oldVal = sel.value;
+      sel.replaceChildren();
+      for (const m of data.models) sel.add(new Option(m, m));
+      if (data.models.includes(oldVal)) sel.value = oldVal;
+      else sel.value = data.models[0];
+      $('ollamaStatusBadge').textContent = 'Ollama Connected (' + data.models.length + ' models)';
+      $('ollamaStatusBadge').style.borderColor = '#2aff95';
+      $('ollamaStatusBadge').style.color = '#2aff95';
+    } else {
+      $('ollamaStatusBadge').textContent = 'Ollama Offline / Unreachable';
+      $('ollamaStatusBadge').style.borderColor = '#e05260';
+      $('ollamaStatusBadge').style.color = '#e05260';
+    }
+  } catch (e) {
+    $('ollamaStatusBadge').textContent = 'Ollama Connection Failed';
+    $('ollamaStatusBadge').style.borderColor = '#e05260';
+    $('ollamaStatusBadge').style.color = '#e05260';
+  }
+}
+
+$('refreshBtn').onclick = refreshAll;
+$('ollamaUrl').addEventListener('change', refreshAll);
+
+// Append message to chat
+function appendMessage(sender, text) {
+  const container = $('chatHistory');
+  const div = document.createElement('div');
+  div.className = sender === 'user' ? 'msg msg-user' : 'msg msg-miku';
+
+  const header = document.createElement('div');
+  header.className = 'msg-header';
+  header.textContent = sender === 'user' ? 'You' : 'Hatsune Miku';
+  div.appendChild(header);
+
+  const content = document.createElement('div');
+  content.className = 'msg-text';
+  content.textContent = text;
+  div.appendChild(content);
+
+  container.appendChild(div);
+  container.scrollTop = container.scrollHeight;
+  return content;
+}
+
+// Stream execution
+$('sendBtn').onclick = async () => {
+  const prompt = $('promptInput').value.trim();
+  if (!prompt) return;
+
+  player.init();
+  $('sendBtn').disabled = true;
+  $('stopBtn').disabled = false;
+  $('statusText').textContent = 'Connecting to Ollama & streaming real-time speech…';
+
+  appendMessage('user', prompt);
+  const mikuTextEl = appendMessage('miku', '');
+  const cursor = document.createElement('span');
+  cursor.className = 'streaming-cursor';
+  mikuTextEl.appendChild(cursor);
+
+  activeController = new AbortController();
+
+  const payload = {
+    prompt: prompt,
+    ollama_url: $('ollamaUrl').value.trim(),
+    ollama_model: $('ollamaModel').value.trim(),
+    system_prompt: $('systemPrompt').value.trim(),
+    voice: $('voice').value.trim(),
+    pitch: parseInt($('pitch').value, 10),
+    index_rate: parseFloat($('index_rate').value),
+    protect: parseFloat($('protect').value),
+    rms: parseFloat($('rms').value),
+    method: $('method').value,
+    model: $('model').value,
+    index: $('index').value
+  };
+
+  try {
+    const response = await fetch('/api/chat_stream', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      signal: activeController.signal
+    });
+
+    if (!response.ok) {
+      throw new Error('HTTP ' + response.status + ': ' + response.statusText);
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder('utf-8');
+    let buffer = '';
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const events = buffer.split('\n\n');
+      buffer = events.pop(); // keep remainder
+
+      for (const ev of events) {
+        if (!ev.trim()) continue;
+        const lines = ev.split('\n');
+        let eventType = 'message';
+        let dataStr = '';
+
+        for (const line of lines) {
+          if (line.startsWith('event:')) eventType = line.slice(6).trim();
+          else if (line.startsWith('data:')) dataStr += line.slice(5).trim();
+        }
+
+        if (!dataStr) continue;
+        try {
+          const parsed = JSON.parse(dataStr);
+          if (eventType === 'text') {
+            cursor.remove();
+            mikuTextEl.textContent += parsed.token;
+            mikuTextEl.appendChild(cursor);
+            $('chatHistory').scrollTop = $('chatHistory').scrollHeight;
+          } else if (eventType === 'audio') {
+            $('statusText').textContent = 'Speaking: "' + parsed.sentence + '"';
+            player.queueWavBase64(parsed.audio);
+          } else if (eventType === 'done') {
+            cursor.remove();
+          }
+        } catch (err) {
+          console.error('Error parsing SSE event:', err);
+        }
+      }
+    }
+  } catch (err) {
+    if (err.name !== 'AbortError') {
+      mikuTextEl.textContent += ' [Error: ' + err.message + ']';
+      $('statusText').textContent = 'Error: ' + err.message;
+    }
+  } finally {
+    cursor.remove();
+    activeController = null;
+    $('sendBtn').disabled = false;
+    $('stopBtn').disabled = true;
+    if (!player.isPlaying) {
+      $('statusText').textContent = 'Ready.';
+    }
+  }
+};
+
+$('stopBtn').onclick = () => {
+  if (activeController) {
+    activeController.abort();
+    activeController = null;
+  }
+  player.stop();
+  $('sendBtn').disabled = false;
+  $('stopBtn').disabled = true;
+  $('statusText').textContent = 'Stopped.';
+};
+
+// Initial startup
+refreshAll();
+</script>
+</body>
+</html>
