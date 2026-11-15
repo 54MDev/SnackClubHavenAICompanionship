@@ -529,7 +529,10 @@ Plan review findings first, then ordered steps.
      which does expose it. Both this and `_systemOcclusionEnabled` were stale instructions
      in `docs/mruk_depth_occlusion_notes.md`, now corrected there.
    - APK: `Builds/SnackClubHaven-step6.apk`; earlier builds kept installable.
-7. LLM dialogue: TTS + lipsync is the hard part, not the API call.
+7. LLM dialogue: TTS is the hard part, not the API call.
+   **Lipsync cut 2026-11-14 (user's call) — not needed.** Audio plays through the headset
+   speakers (`Assets/Scripts/AudioPlaybackReceiver.cs`, below); the character does not need
+   to visibly mouth the words.
    **Status 2026-11-14 — further along than this list implied, but PC-side only.** Already
    built in `tools/`: `miku_client.py` (456 lines; Ollama token streaming + real-time TTS
    audio over SSE from a second machine at `172.16.1.27:8765`), `voice_input.py`
@@ -539,13 +542,11 @@ Plan review findings first, then ordered steps.
    downloaded and ran, but captured no speech, so mic capture is unverified.
    **Note this uses Ollama, not the Claude API** — the "pick a Claude model via the
    `claude-api` skill" line above is superseded unless you deliberately switch back.
-   **What is actually left:** all of the above plays audio on the **PC**, while the
-   character now renders in an **on-device APK**. Either (a) accept PC-side audio — fine
-   if the livestream mixes PC audio, and it costs nothing — or (b) stream audio to the
-   Quest app, which is what on-device lipsync (OVRLipSync visemes) would need.
-   **Done when:** a hardcoded line of dialogue plays as audible speech synced to the
-   character on-device (lipsync can lag; audio playback cannot), via one manual run —
-   record which Claude model was picked and why.
+   **What is actually left — DONE 2026-11-14:** audio now streams to the Quest app itself
+   (`--headset <ip>` on `voice_input.py`/`miku_client.py` → `AudioPlaybackReceiver.cs` on
+   the `DonQuixote` GameObject, TCP port 5008) instead of staying PC-side.
+   **Done when:** a hardcoded line of dialogue plays as audible speech on-device, via one
+   manual run — record which Claude model was picked and why.
 
    **Partial progress, 2026-11-14 — speech-in half built and tested on desktop; still not
    the Claude-model path, and not yet wired to the character on-device.** Added
@@ -578,9 +579,9 @@ Plan review findings first, then ordered steps.
      checksum mismatch — fixed by deleting the bad `~/.cache/whisper/base.pt` and letting it
      re-download, or just use `--whisper-model tiny` on a flaky connection).
    - **Not yet tried:** real speech into `voice_input.py` end-to-end (only tested with
-     silence, which correctly transcribes to `''`); playback on the actual character
-     on-device in Unity/Quest (everything above ran on desktop via `sounddevice`, not
-     through `PoseReceiver`'s rig or any lipsync); and the Claude-model swap mentioned above.
+     silence, which correctly transcribes to `''`); and the Claude-model swap mentioned
+     above. Controller push-to-talk (`Assets/Scripts/VoicePTT.cs`, hold A/X) and on-device
+     audio playback are built — see the headset-audio note above.
 8. ~~Repeat step 1 for the other rigs.~~ **CUT 2026-11-14 — scope is DonQuixote only.**
    The other 8 rigs in `Rigs/` stay source FBX; don't spend time on them. If one is ever
    revived, what Don needed was: import as Humanoid (all 19 required `HumanBodyBones`
